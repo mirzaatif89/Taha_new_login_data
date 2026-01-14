@@ -1,0 +1,7 @@
+{
+  // Enable Pylance to resolve root modules and files inside /web
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}",
+    "${workspaceFolder}/web"
+  ]
+}

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TAHA College Detail Bot</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="brand">
+        <div class="brand__logo">TAHA</div>
+        <div class="brand__text">
+          <span>College Automation</span>
+          <small>Student portal companion</small>
+        </div>
+      </div>
+      <div class="badge">Canvas · Attendance · Reporting</div>
+    </header>
+
+    <main class="page">
+      <section class="hero">
+        <div class="hero__text">
+          <h1>Run smarter browser batches.</h1>
+          <p>
+            Upload your roster, preview column health, and launch concurrent logins in seconds. Keep reports tidy
+            with one tap.
+          </p>
+          <ul class="hero__stats">
+            <li>
+              <span>01</span>
+              <small>Upload roster</small>
+            </li>
+            <li>
+              <span>02</span>
+              <small>Download template</small>
+            </li>
+            <li>
+              <span>03</span>
+              <small>Launch automation</small>
+            </li>
+          </ul>
+        </div>
+        <aside class="hero__note">
+          <h3>Automation tips</h3>
+          <p>Use the toggles to switch between quick login status runs and the full attendance report.</p>
+          <p>Adjust concurrent browsers to match your machine capacity. Incognito sessions help keep cookies clean.</p>
+        </aside>
+      </section>
+
+      <section class="panel grid-3">
+        <article class="card">
+          <header>
+            <h2>Upload</h2>
+            <p>Select a file to process. We only store the path locally.</p>
+          </header>
+          <button id="upload-btn" class="btn primary">Upload File</button>
+          <div class="field">
+            <label class="toggle">
+              <input id="upload-by-file" type="checkbox" checked />
+              <span>By File</span>
+            </label>
+            <label class="toggle">
+              <input id="upload-by-stored" type="checkbox" />
+              <span>By Stored Data</span>
+            </label>
+          </div>
+          <div class="status" id="upload-status">No file selected.</div>
+          <div class="columns" id="upload-columns">Columns: —</div>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>Download</h2>
+            <p>Grab a clean template with the expected headers.</p>
+          </header>
+          <button id="download-btn" class="btn ghost">Download Template</button>
+          <div class="status" id="download-status">No download yet.</div>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>Login</h2>
+            <p>Open browsers and attempt logins using the uploaded template.</p>
+          </header>
+          <div class="field">
+            <label for="thread-count">Concurrent browsers</label>
+            <input id="thread-count" type="number" min="1" max="20" value="1" />
+          </div>
+          <label class="toggle">
+            <input id="incognito-toggle" type="checkbox" />
+            <span>Open in incognito</span>
+          </label>
+          <label class="toggle narrow">
+            <input id="log-login-status" type="checkbox" checked />
+            <span>Show login status</span>
+          </label>
+          <label class="toggle narrow">
+            <input id="log-attendance-status" type="checkbox" />
+            <span>Show attendance status</span>
+          </label>
+          <button id="login-btn" class="btn primary">Login</button>
+          <div class="status" id="login-status">Not started.</div>
+          <div class="status" id="login-time">Time: —</div>
+        </article>
+
+        <article class="card" id="report-card">
+          <header>
+            <h2>Report Section</h2>
+            <p>Exported reports are saved in the reports folder for quick review.</p>
+          </header>
+          <button id="report-btn" class="btn ghost">Open Report</button>
+          <div class="status" id="report-preview">Loading report summary...</div>
+        </article>
+      </section>
+
+      <section class="timeline card">
+        <h3>Execution flow</h3>
+        <ol>
+          <li>
+            <strong>Prepare</strong>
+            <span>Validate columns, select log vs attendance reporting.</span>
+          </li>
+          <li>
+            <strong>Automate</strong>
+            <span>Selenium opens the requested number of browsers and rotates credentials.</span>
+          </li>
+          <li>
+            <strong>Report</strong>
+            <span>Exports either Username/Login Status or the full attendance table.</span>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <div class="shape shape-one"></div>
+    <div class="shape shape-two"></div>
+
+    <div class="modal" id="upload-modal" aria-hidden="true">
+      <div class="modal__card" role="dialog" aria-labelledby="upload-modal-title">
+        <button class="modal__close" id="upload-modal-close" aria-label="Close notification">&times;</button>
+        <div class="modal__badge">Heads up</div>
+        <h3 id="upload-modal-title">Upload needed</h3>
+        <p id="upload-modal-message">Upload your clients file before starting logins.</p>
+        <button class="btn primary modal__action" id="upload-modal-cta">Got it</button>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
