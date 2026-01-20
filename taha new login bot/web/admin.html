@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand brand-link" href="index.html" aria-label="Go to dashboard">
+        <div class="brand__logo">TAHA</div>
+        <div class="brand__text">
+          <span>Admin</span>
+          <small>Reserved area</small>
+        </div>
+      </a>
+      <div class="masthead__actions">
+        <div class="badge">Admin · Controls · Tools</div>
+        <button id="refresh-btn" class="btn ghost small" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="panel grid-2">
+        <article class="card">
+          <div class="settings-list">
+            <div class="settings-item">
+              <span>Reset Data</span>
+              <button id="admin-reset-btn" class="btn ghost small" type="button">Reset</button>
+            </div>
+            <div class="settings-item">
+              <span>Forgot Password</span>
+              <button id="admin-forgot-btn" class="btn ghost small" type="button">Recover</button>
+            </div>
+            <div class="settings-item">
+              <span>Logout</span>
+              <button id="admin-logout-btn" class="btn ghost small" type="button">Logout</button>
+            </div>
+          </div>
+        </article>
+        <article class="card">
+          <header>
+            <h2>Admin Accounts</h2>
+            <p>Open the admin directory with account details.</p>
+          </header>
+          <button class="btn ghost" type="button" id="admin-accounts-open">Open</button>
+        </article>
+      </section>
+    </main>
+
+    <div class="modal" id="admin-setup-modal" aria-hidden="true">
+      <div class="modal__card" role="dialog" aria-labelledby="admin-setup-title">
+        <button class="modal__close" id="admin-setup-close" aria-label="Close admin setup">&times;</button>
+        <div class="modal__badge">Admin Setup</div>
+        <h3 id="admin-setup-title">Set your admin password</h3>
+        <div class="field">
+          <label for="admin-name">Name</label>
+          <input id="admin-name" type="text" autocomplete="name" />
+        </div>
+        <div class="field">
+          <label for="admin-email">Email</label>
+          <input id="admin-email" type="email" autocomplete="email" />
+        </div>
+        <div class="field">
+          <label for="admin-password">Password</label>
+          <input id="admin-password" type="password" autocomplete="new-password" />
+        </div>
+        <div class="field">
+          <label for="admin-password-confirm">Confirm password</label>
+          <input id="admin-password-confirm" type="password" autocomplete="new-password" />
+        </div>
+        <div class="status" id="admin-setup-status"></div>
+        <button class="btn primary modal__action" id="admin-setup-save">Save Password</button>
+      </div>
+    </div>
+
+    <div class="modal" id="admin-login-modal" aria-hidden="true">
+      <div class="modal__card admin-login-card split-card" role="dialog" aria-labelledby="admin-login-title">
+        <button class="modal__close" id="admin-login-close" aria-label="Close admin login">&times;</button>
+        <div class="login-split">
+          <div class="login-visual">
+            <div class="modal__badge">Admin Login</div>
+            <div class="robot" id="admin-robot" aria-hidden="true">
+              <div class="robot__head">
+                <div class="robot__antenna"></div>
+                <div class="robot__eye robot__eye--left"></div>
+                <div class="robot__eye robot__eye--right"></div>
+                <div class="robot__glow"></div>
+                <div class="robot__cheek robot__cheek--left"></div>
+                <div class="robot__cheek robot__cheek--right"></div>
+              </div>
+              <div class="robot__mouth"></div>
+              <div class="robot__tear"></div>
+              <div class="robot__message" id="robot-message">Try again</div>
+            </div>
+            <p class="login-visual__note">Friendly security bot watching your sign-in.</p>
+          </div>
+          <div class="login-form">
+            <h3 id="admin-login-title">Sign in to admin</h3>
+            <div class="field">
+              <label for="admin-login-email">Email</label>
+              <input id="admin-login-email" type="email" autocomplete="email" />
+            </div>
+            <div class="field">
+              <label for="admin-login-password">Password</label>
+              <div class="password-field">
+                <input id="admin-login-password" type="password" autocomplete="current-password" />
+                <button id="admin-login-toggle" class="btn ghost small eye-btn" type="button" aria-label="Show password">
+                  Show
+                </button>
+              </div>
+            </div>
+            <div class="status" id="admin-login-status"></div>
+            <button class="btn primary modal__action" id="admin-login-submit">Login</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="admin-success-modal" aria-hidden="true">
+      <div class="modal__card" role="dialog" aria-labelledby="admin-success-title">
+        <button class="modal__close" id="admin-success-close" aria-label="Close success modal">&times;</button>
+        <div class="modal__badge">Admin</div>
+        <h3 id="admin-success-title">Successfully created admin</h3>
+        <p id="admin-success-message">Your admin password has been saved.</p>
+        <button class="btn primary modal__action" id="admin-success-cta">Continue</button>
+      </div>
+    </div>
+
+    <div class="modal" id="admin-recover-modal" aria-hidden="true">
+      <div class="modal__card" role="dialog" aria-labelledby="admin-recover-title">
+        <button class="modal__close" id="admin-recover-close" aria-label="Close recovery modal">&times;</button>
+        <div class="modal__badge">Recovery</div>
+        <h3 id="admin-recover-title">Recover admin password</h3>
+        <div class="recover-step" id="recover-step-email">
+          <div class="field">
+            <label for="recover-email">Enter admin email</label>
+            <input id="recover-email" type="email" autocomplete="email" />
+          </div>
+          <div class="status" id="recover-email-status"></div>
+          <button class="btn primary modal__action" id="recover-send-otp">Send OTP</button>
+        </div>
+        <div class="recover-step" id="recover-step-otp">
+          <div class="field">
+            <label for="recover-otp">Enter 6-digit OTP</label>
+            <input id="recover-otp" type="text" inputmode="numeric" maxlength="6" />
+          </div>
+          <div class="status" id="recover-otp-hint"></div>
+          <div class="status" id="recover-otp-status"></div>
+          <button class="btn primary modal__action" id="recover-verify-otp">Verify OTP</button>
+        </div>
+        <div class="recover-step" id="recover-step-password">
+          <div class="field">
+            <label for="recover-password">New password</label>
+            <input id="recover-password" type="password" autocomplete="new-password" />
+          </div>
+          <div class="field">
+            <label for="recover-password-confirm">Confirm password</label>
+            <input id="recover-password-confirm" type="password" autocomplete="new-password" />
+          </div>
+          <div class="status" id="recover-password-status"></div>
+          <button class="btn primary modal__action" id="recover-save-password">Save Password</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="admin-reset-modal" aria-hidden="true">
+      <div class="modal__card" role="dialog" aria-labelledby="admin-reset-title">
+        <button class="modal__close" id="admin-reset-close" aria-label="Close reset modal">&times;</button>
+        <div class="modal__badge">Reset</div>
+        <h3 id="admin-reset-title">Confirm admin password</h3>
+        <div class="field">
+          <label for="admin-reset-password">Admin password</label>
+          <input id="admin-reset-password" type="password" autocomplete="current-password" />
+        </div>
+        <div class="status" id="admin-reset-status"></div>
+        <div class="modal__actions">
+          <button class="btn ghost small" type="button" id="admin-reset-cancel">Cancel</button>
+          <button class="btn primary small" type="button" id="admin-reset-confirm">Reset Now</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="welcome-overlay" id="admin-welcome-overlay" aria-hidden="true">
+      <div class="welcome-overlay__card">
+        <div class="welcome-overlay__title">Welcome to the Admin</div>
+        <p>You're signed in. Enjoy a smooth session.</p>
+      </div>
+    </div>
+
+    <div class="nav-arrows" aria-label="Page navigation">
+      <button class="nav-arrow" type="button" data-nav="back" aria-label="Go back">&lt;</button>
+      <button class="nav-arrow" type="button" data-nav="forward" aria-label="Go forward">&gt;</button>
+    </div>
+
+    <script src="theme.js"></script>
+    <script src="nav.js"></script>
+    <script src="refresh.js"></script>
+    <script src="admin.js"></script>
+    <script>
+      const adminResetBtn = document.getElementById("admin-reset-btn");
+      const adminResetModal = document.getElementById("admin-reset-modal");
+      const adminResetClose = document.getElementById("admin-reset-close");
+      const adminResetCancel = document.getElementById("admin-reset-cancel");
+      const adminResetConfirm = document.getElementById("admin-reset-confirm");
+      const adminResetPassword = document.getElementById("admin-reset-password");
+      const adminResetStatus = document.getElementById("admin-reset-status");
+      function openAdminResetModal() {
+        if (!adminResetModal) return;
+        adminResetModal.classList.add("show");
+        adminResetModal.setAttribute("aria-hidden", "false");
+        if (adminResetPassword) {
+          adminResetPassword.value = "";
+          adminResetPassword.focus();
+        }
+        if (adminResetStatus) adminResetStatus.textContent = "";
+      }
+
+      function closeAdminResetModal() {
+        if (!adminResetModal) return;
+        adminResetModal.classList.remove("show");
+        adminResetModal.setAttribute("aria-hidden", "true");
+      }
+
+      function getAdminPassword() {
+        try {
+          const raw = localStorage.getItem("taha-admin");
+          if (raw) {
+            const admin = JSON.parse(raw);
+            return admin && admin.password ? admin.password : "";
+          }
+          return localStorage.getItem("taha-admin-password") || "";
+        } catch (error) {
+          return "";
+        }
+      }
+
+      function keepAdminPassword(password) {
+        try {
+          let admin = null;
+          let admins = null;
+          try {
+            const raw = localStorage.getItem("taha-admin");
+            admin = raw ? JSON.parse(raw) : null;
+            const listRaw = localStorage.getItem("taha-admins");
+            admins = listRaw ? JSON.parse(listRaw) : null;
+          } catch (innerError) {
+            admin = null;
+            admins = null;
+          }
+          localStorage.clear();
+          if (admin && admin.password) {
+            localStorage.setItem("taha-admin", JSON.stringify(admin));
+            if (Array.isArray(admins)) {
+              localStorage.setItem("taha-admins", JSON.stringify(admins));
+            }
+          } else if (password) {
+            localStorage.setItem("taha-admin-password", password);
+          }
+        } catch (error) {
+          // Ignore storage failures.
+        }
+      }
+
+      function handleAdminReset() {
+        if (!adminResetStatus) return;
+        const stored = getAdminPassword();
+        const entered = adminResetPassword ? adminResetPassword.value : "";
+        if (!stored) {
+          adminResetStatus.textContent = "Admin password is not set.";
+          return;
+        }
+        if (!entered || entered !== stored) {
+          adminResetStatus.textContent = "Invalid admin password.";
+          return;
+        }
+        keepAdminPassword(stored);
+        adminResetStatus.textContent = "Reset completed.";
+        closeAdminResetModal();
+        if (typeof window.navigateReload === "function") {
+          window.navigateReload();
+          return;
+        }
+        window.location.reload();
+      }
+
+      if (adminResetBtn) adminResetBtn.addEventListener("click", openAdminResetModal);
+      if (adminResetClose) adminResetClose.addEventListener("click", closeAdminResetModal);
+      if (adminResetCancel) adminResetCancel.addEventListener("click", closeAdminResetModal);
+      if (adminResetConfirm) adminResetConfirm.addEventListener("click", handleAdminReset);
+      if (adminResetModal) {
+        adminResetModal.addEventListener("click", (event) => {
+          if (event.target === adminResetModal) {
+            closeAdminResetModal();
+          }
+        });
+      }
+    </script>
+  </body>
+</html>

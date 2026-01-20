@@ -147,12 +147,17 @@ def download_template(
     template_source: Path,
     columns: Sequence[str] | None = None,
     default_filename: str = "login_template.xlsx",
+    target_path: Path | None = None,
 ):
     """
     Copy an existing Excel template or generate a fresh one with the expected columns.
     """
-    downloads_dir = BASE_DIR / "templates"
-    target_path = downloads_dir / default_filename
+    if target_path:
+        if not target_path.suffix:
+            target_path = target_path.with_suffix(".xlsx")
+    else:
+        downloads_dir = BASE_DIR / "templates"
+        target_path = downloads_dir / default_filename
     try:
         _ensure_parent(target_path)
         if template_source and template_source.is_file():
@@ -288,6 +293,7 @@ def run_login_batch(
     concurrency: int = 1,
     incognito: bool = False,
     mode: str = "attendance",
+    store_results: bool = True,
 ):
     """
     Automate the TAHA login form and feed Username/Password pairs sequentially.
@@ -441,10 +447,11 @@ def run_login_batch(
             _close_active_drivers()
 
     elapsed = perf_counter() - start
-    try:
-        store_results_in_db(results, mode)
-    except Exception as exc:
-        browser_error = browser_error or f"DB store failed: {exc}"
+    if store_results:
+        try:
+            store_results_in_db(results, mode)
+        except Exception as exc:
+            browser_error = browser_error or f"DB store failed: {exc}"
     return {
         "results": results,
         "elapsed_seconds": round(elapsed, 3),

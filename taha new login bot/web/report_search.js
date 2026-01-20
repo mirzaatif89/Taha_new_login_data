@@ -14,6 +14,7 @@ const searchBtn = document.getElementById("report-search-btn");
 const searchFilter = document.getElementById("report-search-filter");
 const searchStatus = document.getElementById("report-search-status");
 const searchResults = document.getElementById("report-search-results");
+const downloadsOpen = document.getElementById("downloads-open");
 
 function setStatus(message) {
   if (searchStatus) {
@@ -52,6 +53,40 @@ function getLatestByUser(rows) {
     seen.add(username);
     return true;
   });
+}
+
+async function waitForApi(method, attempts = 6) {
+  for (let i = 0; i < attempts; i += 1) {
+    bindApi();
+    if (api && typeof api[method] === "function") {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return false;
+}
+
+function buildClientTable(rows) {
+  if (!rows.length) return "";
+  const header = `
+    <div class="client-table__row client-table__header">
+      <div>Type</div>
+      <div>Details</div>
+      <div>Created</div>
+    </div>
+  `;
+  const body = rows
+    .map(
+      (row) => `
+      <div class="client-table__row">
+        <div>${row.type}</div>
+        <div>${row.detail}</div>
+        <div>${row.created}</div>
+      </div>
+    `
+    )
+    .join("");
+  return `<div class="client-table">${header}${body}</div>`;
 }
 
 async function safeCall(fn, fallbackMessage) {
@@ -122,53 +157,72 @@ async function runSearch() {
       return;
     }
 
-    const groups = [];
+    const tableRows = [];
     if (filterValue === "all" || filterValue === "credentials") {
-      groups.push(
-        buildResultGroup(
-          "Credentials",
-          credentials,
-          (row) => `${row.username || "-"} | ${row.password || "-"}`,
-          "report_credentials.html"
-        )
+      credentials.forEach((row) =>
+        tableRows.push({
+          type: "Credentials",
+          detail: `${row.username || "-"} | ${row.password || "-"}`,
+          created: row.created_at || "-",
+        })
       );
     }
     if (filterValue === "all" || filterValue === "login-status") {
-      groups.push(
-        buildResultGroup(
-          "Login Status",
-          loginStatus,
-          (row) => `${row.username || "-"} | ${row.status || "-"} | ${row.detail || "-"}`,
-          "report_login_status.html"
-        )
+      loginStatus.forEach((row) =>
+        tableRows.push({
+          type: "Login Status",
+          detail: `${row.username || "-"} | ${row.status || "-"} | ${row.detail || "-"}`,
+          created: row.created_at || "-",
+        })
       );
     }
     if (filterValue === "all" || filterValue === "last-attendance") {
-      groups.push(
-        buildResultGroup(
-          "Last Attendance",
-          attendance,
-          (row) =>
-            `${row.username || "-"} | ${row.day || "-"} | ${row.signin || "-"} → ${row.signout || "-"}`,
-          "report_attendance.html"
-        )
+      attendance.forEach((row) =>
+        tableRows.push({
+          type: "Attendance",
+          detail: `${row.username || "-"} | ${row.day || "-"} | ${row.signin || "-"} → ${row.signout || "-"}`,
+          created: row.created_at || "-",
+        })
       );
     }
     if (filterValue === "all" || filterValue === "credit-hours") {
-      groups.push(
-        buildResultGroup(
-          "Credit Hours",
-          creditHours,
-          (row) => `${row.username || "-"} | ${row.total_time || "-"}`,
-          "report_credit_hours.html"
-        )
+      creditHours.forEach((row) =>
+        tableRows.push({
+          type: "Credit Hours",
+          detail: `${row.username || "-"} | ${row.total_time || "-"}`,
+          created: row.created_at || "-",
+        })
       );
     }
 
-    const content = groups.filter(Boolean).join("");
-
     if (searchResults) {
-      searchResults.innerHTML = content;
+      const downloadBtn = `<button class="btn ghost" type="button" id="client-download-btn">Save to Downloads</button>`;
+      searchResults.innerHTML = `${downloadBtn}${buildClientTable(tableRows)}`;
+      const downloadBtnEl = document.getElementById("client-download-btn");
+      if (downloadBtnEl) {
+        downloadBtnEl.addEventListener("click", async () => {
+          const ready = await waitForApi("save_client_report");
+          if (!ready) {
+            setStatus("Download API not available. Restart the app.");
+            return;
+          }
+          setStatus("Saving client report...");
+          try {
+            const result = await safeCall(
+              () => api.save_client_report(query),
+              "Failed to save client report."
+            );
+            if (result.saved) {
+              setStatus(`Saved to ${result.path}`);
+              refreshDownloads();
+            } else {
+              setStatus(result.error || "Failed to save client report.");
+            }
+          } catch (error) {
+            setStatus(error.message || "Failed to save client report.");
+          }
+        });
+      }
     }
     setStatus(`Matches: ${totalMatches}`);
   } catch (error) {
@@ -182,5 +236,14 @@ if (searchInput) {
     if (event.key === "Enter") {
       runSearch();
     }
+  });
+}
+if (downloadsOpen) {
+  downloadsOpen.addEventListener("click", () => {
+    if (typeof window.navigateTo === "function") {
+      window.navigateTo("downloads.html");
+      return;
+    }
+    window.location.href = "downloads.html";
   });
 }

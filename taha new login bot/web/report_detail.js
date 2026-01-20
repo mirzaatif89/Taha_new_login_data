@@ -15,9 +15,15 @@ const metaEl = document.getElementById("detail-meta");
 const searchInput = document.getElementById("detail-search-input");
 const searchBtn = document.getElementById("detail-search-btn");
 const deleteSelectedBtn = document.getElementById("detail-delete-selected");
+const successFilter = document.getElementById("detail-success-filter");
+const startDateInput = document.getElementById("detail-start-date");
+const endDateInput = document.getElementById("detail-end-date");
 
 const urlParams = new URLSearchParams(window.location.search);
 let queryParam = String(urlParams.get("q") || "").trim().toLowerCase();
+let successParam = String(urlParams.get("success") || "all").trim().toLowerCase();
+let startDateParam = String(urlParams.get("start") || "").trim();
+let endDateParam = String(urlParams.get("end") || "").trim();
 
 const SECTION_CONFIG = {
   credentials: {
@@ -205,6 +211,63 @@ function filterRows(rows, field) {
   });
 }
 
+function normalizeFilterValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function parseDateOnly(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function getRowDate(row) {
+  if (!row || !row.created_at) return null;
+  return parseDateOnly(row.created_at);
+}
+
+function getSuccessValue(row) {
+  if (typeof row.success === "boolean") {
+    return row.success ? "success" : "failed";
+  }
+  if (row.success !== undefined && row.success !== null) {
+    return normalizeFilterValue(row.success);
+  }
+  return normalizeFilterValue(row.status);
+}
+
+function applyLoginStatusFilters(rows) {
+  let filtered = rows || [];
+  filtered = filterRows(filtered, "username");
+  const startDate = parseDateOnly(startDateParam);
+  const endDate = parseDateOnly(endDateParam);
+  if (startDate || endDate) {
+    filtered = filtered.filter((row) => {
+      const rowDate = getRowDate(row);
+      if (!rowDate) return false;
+      if (startDate && rowDate < startDate) return false;
+      if (endDate) {
+        const endOfDay = new Date(
+          endDate.getFullYear(),
+          endDate.getMonth(),
+          endDate.getDate(),
+          23,
+          59,
+          59,
+          999
+        );
+        if (rowDate > endOfDay) return false;
+      }
+      return true;
+    });
+  }
+  if (successParam && successParam !== "all") {
+    filtered = filtered.filter((row) => getSuccessValue(row) === successParam);
+  }
+  return filtered;
+}
+
 function parseTotalTime(totalTime) {
   if (!totalTime || typeof totalTime !== "string") return null;
   const parts = totalTime.split(":").map((part) => parseInt(part, 10));
@@ -242,6 +305,126 @@ async function safeCall(fn, fallbackMessage) {
 }
 
 let loadAttempts = 0;
+let lastFilteredRows = [];
+let showPopupAfterLoad = false;
+
+function ensureReportModal() {
+  let modal = document.getElementById("report-modal");
+  if (modal) return modal;
+
+  modal = document.createElement("div");
+  modal.id = "report-modal";
+  modal.className = "modal";
+  modal.innerHTML = `
+    <div class="modal__card report-modal" role="dialog" aria-modal="true" aria-labelledby="report-title">
+      <button class="modal__close" type="button" aria-label="Close report popup">&times;</button>
+      <h3 id="report-title">Filtered Results</h3>
+      <div class="report-modal__actions">
+        <button id="report-download" class="btn ghost" type="button">Save As</button>
+      </div>
+      <div class="report-modal__body">
+        <div class="table-wrap report-modal__table">
+          <table class="data-table" id="report-modal-table">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const closeBtn = modal.querySelector(".modal__close");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => modal.classList.remove("show"));
+  }
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) {
+      modal.classList.remove("show");
+    }
+  });
+
+  return modal;
+}
+
+function buildPopupTable(columns, rows) {
+  const modal = ensureReportModal();
+  const tableEl = modal.querySelector("#report-modal-table");
+  if (!tableEl) return;
+  const popupColumns = columns.filter((col) => !["select", "actions"].includes(col.key));
+
+  const thead = tableEl.querySelector("thead");
+  const tbody = tableEl.querySelector("tbody");
+  if (!thead || !tbody) return;
+  thead.innerHTML = "";
+  tbody.innerHTML = "";
+
+  const headerRow = document.createElement("tr");
+  popupColumns.forEach((col) => {
+    const th = document.createElement("th");
+    th.textContent = col.label;
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+
+  if (!rows || rows.length === 0) {
+    const emptyRow = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = popupColumns.length;
+    cell.textContent = "No data for current filters.";
+    emptyRow.appendChild(cell);
+    tbody.appendChild(emptyRow);
+    return;
+  }
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    popupColumns.forEach((col) => {
+      const td = document.createElement("td");
+      const value = row[col.key];
+      td.textContent = value === null || value === undefined ? "" : String(value);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function toCsvValue(value) {
+  const text = value === null || value === undefined ? "" : String(value);
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, "\"\"")}"`;
+  }
+  return text;
+}
+
+async function saveExcel(columns, rows) {
+  const popupColumns = columns.filter((col) => !["select", "actions"].includes(col.key));
+  const exportRows = (rows || []).map((row) => {
+    const entry = {};
+    popupColumns.forEach((col) => {
+      entry[col.label] = row[col.key];
+    });
+    return entry;
+  });
+  if (api && typeof api.save_excel_report === "function") {
+    try {
+      const result = await safeCall(
+        () => api.save_excel_report(exportRows, "login_status_filtered.xlsx"),
+        "Failed to save report."
+      );
+      if (!result.saved) {
+        setStatus(result.error || "Save cancelled.");
+        return;
+      }
+      setStatus(`Saved: ${result.path}`);
+      return;
+    } catch (error) {
+      setStatus(error.message || "Failed to save report.");
+      return;
+    }
+  }
+  setStatus("Excel save is not available. Restart the app.");
+}
 
 async function loadDetail() {
   const section = document.body.getAttribute("data-section");
@@ -271,7 +454,9 @@ async function loadDetail() {
   try {
     const result = await safeCall(() => api.get_report_data(), "Failed to load report data.");
     const rawRows = config.rows(result);
-    const rows = filterRows(rawRows, "username");
+    const rows =
+      section === "login-status" ? applyLoginStatusFilters(rawRows) : filterRows(rawRows, "username");
+    lastFilteredRows = rows;
     if (section === "credentials") {
       buildBody(config.columns, rows, {
         renderCell: (item, key) => {
@@ -352,10 +537,34 @@ async function loadDetail() {
     }
     const limit = result.limit ? ` (latest ${result.limit})` : "";
     if (metaEl) {
-      const queryNote = queryParam ? ` | Filter: ${queryParam}` : "";
+      const filters = [];
+      if (queryParam) {
+        filters.push(`Search: ${queryParam}`);
+      }
+      if (section === "login-status") {
+        if (successParam && successParam !== "all") {
+          filters.push(`Success: ${successParam}`);
+        }
+        if (startDateParam || endDateParam) {
+          const startLabel = startDateParam || "...";
+          const endLabel = endDateParam || "...";
+          filters.push(`Date: ${startLabel} to ${endLabel}`);
+        }
+      }
+      const queryNote = filters.length ? ` | Filter: ${filters.join(", ")}` : "";
       metaEl.textContent = `${config.meta}${limit}${queryNote}.`;
     }
     setStatus(`Rows: ${rows.length}`);
+    if (showPopupAfterLoad && section === "login-status") {
+      showPopupAfterLoad = false;
+      const modal = ensureReportModal();
+      buildPopupTable(config.columns, rows);
+      const downloadBtn = modal.querySelector("#report-download");
+      if (downloadBtn) {
+        downloadBtn.onclick = () => saveExcel(config.columns, rows);
+      }
+      modal.classList.add("show");
+    }
   } catch (error) {
     const message = error && error.message ? error.message : "Failed to load report data.";
     const normalized = message.includes("get_report_data")
@@ -373,21 +582,50 @@ window.addEventListener("pywebviewready", () => {
 loadDetail();
 
 function runSearch() {
+  const section = document.body.getAttribute("data-section");
   const value = String(searchInput ? searchInput.value : "").trim().toLowerCase();
   queryParam = value;
+  successParam = normalizeFilterValue(successFilter ? successFilter.value : "all") || "all";
+  startDateParam = String(startDateInput ? startDateInput.value : "").trim();
+  endDateParam = String(endDateInput ? endDateInput.value : "").trim();
   const nextParams = new URLSearchParams(window.location.search);
   if (value) {
     nextParams.set("q", value);
   } else {
     nextParams.delete("q");
   }
+  if (successParam && successParam !== "all") {
+    nextParams.set("success", successParam);
+  } else {
+    nextParams.delete("success");
+  }
+  if (startDateParam) {
+    nextParams.set("start", startDateParam);
+  } else {
+    nextParams.delete("start");
+  }
+  if (endDateParam) {
+    nextParams.set("end", endDateParam);
+  } else {
+    nextParams.delete("end");
+  }
   const newUrl = `${window.location.pathname}?${nextParams.toString()}`;
   window.history.replaceState({}, "", newUrl);
+  showPopupAfterLoad = section === "login-status";
   loadDetail();
 }
 
 if (searchInput && queryParam) {
   searchInput.value = queryParam;
+}
+if (successFilter) {
+  successFilter.value = successParam || "all";
+}
+if (startDateInput) {
+  startDateInput.value = startDateParam;
+}
+if (endDateInput) {
+  endDateInput.value = endDateParam;
 }
 
 if (searchBtn) {
@@ -401,6 +639,7 @@ if (searchInput) {
     }
   });
 }
+
 
 async function handleCredentialAction(event) {
   const target = event.target;

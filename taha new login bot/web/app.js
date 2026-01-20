@@ -13,6 +13,8 @@ window.addEventListener("pywebviewready", bindApi);
 const uploadBtn = document.getElementById("upload-btn");
 const uploadByFile = document.getElementById("upload-by-file");
 const uploadByStored = document.getElementById("upload-by-stored");
+const testingOnlyToggle = document.getElementById("testing-only-toggle");
+const testingSaveBtn = document.getElementById("testing-save-btn");
 const downloadBtn = document.getElementById("download-btn");
 const loginBtn = document.getElementById("login-btn");
 const threadInput = document.getElementById("thread-count");
@@ -22,6 +24,8 @@ const attendanceStatusToggle = document.getElementById("log-attendance-status");
 const reportBtn = document.getElementById("report-btn");
 const reportCard = document.getElementById("report-card");
 const reportPreview = document.getElementById("report-preview");
+const refreshBtn = document.getElementById("refresh-btn");
+const settingsBtn = document.getElementById("settings-btn");
 
 const uploadStatus = document.getElementById("upload-status");
 const uploadColumns = document.getElementById("upload-columns");
@@ -32,6 +36,7 @@ const uploadModal = document.getElementById("upload-modal");
 const uploadModalMessage = document.getElementById("upload-modal-message");
 const uploadModalClose = document.getElementById("upload-modal-close");
 const uploadModalCta = document.getElementById("upload-modal-cta");
+let testingRows = [];
 
 function setStatus(el, message) {
   if (el) {
@@ -167,6 +172,11 @@ function validateThreadCount(value) {
 
 async function handleLogin() {
   const source = uploadByStored && uploadByStored.checked ? "stored" : "file";
+  const testingOnly = !!(testingOnlyToggle && testingOnlyToggle.checked);
+  if (testingOnly && source !== "file") {
+    setStatus(loginStatus, "Testing mode requires a file upload.");
+    return;
+  }
   if (source === "file" && !hasUploadedFile) {
     showUploadReminder("Upload your clients file before starting logins.");
     setStatus(loginStatus, "Upload your clients file.");
@@ -194,6 +204,8 @@ async function handleLogin() {
   }
   setStatus(loginStatus, "Starting login batch...");
   setStatus(loginTime, "Time: …");
+  if (testingSaveBtn) testingSaveBtn.hidden = true;
+  testingRows = [];
   loginBtn.disabled = true;
   try {
     const options = {
@@ -201,6 +213,7 @@ async function handleLogin() {
       incognito: !!incognitoToggle.checked,
       mode,
       source,
+      testing: testingOnly,
     };
     const result = await safeCall(() => api.start_login(options), "Failed to start login.");
     if (result.error) {
@@ -223,6 +236,10 @@ async function handleLogin() {
       timeMessage += " | Browser error.";
     }
     setStatus(loginTime, timeMessage);
+    if (testingOnly && result.testing_rows) {
+      testingRows = result.testing_rows;
+      if (testingSaveBtn) testingSaveBtn.hidden = testingRows.length === 0;
+    }
   } catch (error) {
     setStatus(loginStatus, error.message);
   } finally {
@@ -234,6 +251,10 @@ if (uploadBtn) uploadBtn.addEventListener("click", handleUpload);
 if (downloadBtn) downloadBtn.addEventListener("click", handleDownload);
 if (loginBtn) loginBtn.addEventListener("click", handleLogin);
 function goToReport() {
+  if (typeof window.navigateTo === "function") {
+    window.navigateTo("report.html");
+    return;
+  }
   window.location.href = "report.html";
 }
 
@@ -244,6 +265,21 @@ if (reportCard) reportCard.addEventListener("click", (event) => {
   }
   goToReport();
 });
+if (refreshBtn) {
+  refreshBtn.addEventListener("click", () => {
+    if (typeof window.navigateReload === "function") {
+      window.navigateReload();
+      return;
+    }
+    window.location.reload();
+  });
+}
+
+if (settingsBtn) {
+  settingsBtn.addEventListener("click", () => {
+    window.location.href = "settings.html";
+  });
+}
 
 loadReportSummary();
 if (uploadModalClose) uploadModalClose.addEventListener("click", hideUploadReminder);
@@ -263,6 +299,7 @@ function syncUploadSource(changed) {
   }
   if (changed === "stored" && uploadByStored.checked) {
     uploadByFile.checked = false;
+    if (testingOnlyToggle) testingOnlyToggle.checked = false;
     setStatus(uploadStatus, "Using stored data. Upload not required.");
     setStatus(uploadColumns, "Columns: —");
     safeCall(() => api.get_credentials_count(), "Failed to read stored credentials.")
@@ -287,4 +324,35 @@ if (uploadByFile) {
 }
 if (uploadByStored) {
   uploadByStored.addEventListener("change", () => syncUploadSource("stored"));
+}
+
+if (testingOnlyToggle) {
+  testingOnlyToggle.addEventListener("change", () => {
+    if (!testingOnlyToggle.checked) return;
+    if (uploadByFile) uploadByFile.checked = true;
+    if (uploadByStored) uploadByStored.checked = false;
+    setStatus(uploadStatus, "Testing mode enabled. Stored data is disabled.");
+  });
+}
+
+if (testingSaveBtn) {
+  testingSaveBtn.addEventListener("click", async () => {
+    if (!testingRows.length) {
+      setStatus(uploadStatus, "No testing data to save.");
+      return;
+    }
+    try {
+      const result = await safeCall(
+        () => api.save_excel_report(testingRows, "testing_report.xlsx"),
+        "Failed to save report."
+      );
+      if (result.saved) {
+        setStatus(uploadStatus, `Saved: ${result.path}`);
+      } else {
+        setStatus(uploadStatus, result.error || "Save cancelled.");
+      }
+    } catch (error) {
+      setStatus(uploadStatus, error.message);
+    }
+  });
 }

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Accounts</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand brand-link" href="index.html" aria-label="Go to dashboard">
+        <div class="brand__logo">TAHA</div>
+        <div class="brand__text">
+          <span>Admin Accounts</span>
+          <small>Saved admin directory</small>
+        </div>
+      </a>
+      <div class="masthead__actions">
+        <div class="badge">Admin · Accounts · Directory</div>
+        <button id="refresh-btn" class="btn ghost small" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="panel grid-2">
+        <article class="card">
+          <header>
+            <h2>Admin Accounts</h2>
+            <p>Names, emails, and creation timestamps.</p>
+          </header>
+          <div class="admin-search">
+            <input id="admin-search-input" type="text" placeholder="Search name or email" />
+          </div>
+          <div class="admin-table" id="admin-accounts-table"></div>
+          <div class="status" id="admin-accounts-status">Loading admins...</div>
+        </article>
+      </section>
+    </main>
+
+    <div class="nav-arrows" aria-label="Page navigation">
+      <button class="nav-arrow" type="button" data-nav="back" aria-label="Go back">&lt;</button>
+      <button class="nav-arrow" type="button" data-nav="forward" aria-label="Go forward">&gt;</button>
+    </div>
+
+    <script src="theme.js"></script>
+    <script src="nav.js"></script>
+    <script src="refresh.js"></script>
+    <script src="admin_accounts.js"></script>
+  </body>
+</html>

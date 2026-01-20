@@ -8,14 +8,17 @@
   </head>
   <body>
     <header class="masthead">
-      <div class="brand">
+      <a class="brand brand-link" href="index.html" aria-label="Go to dashboard">
         <div class="brand__logo">TAHA</div>
         <div class="brand__text">
           <span>College Automation</span>
           <small>Student portal companion</small>
         </div>
+      </a>
+      <div class="masthead__actions">
+        <div class="badge">Canvas · Attendance · Reporting</div>
+        <button id="refresh-btn" class="btn ghost small" type="button">Refresh</button>
       </div>
-      <div class="badge">Canvas · Attendance · Reporting</div>
     </header>
 
     <main class="page">
@@ -64,9 +67,14 @@
               <input id="upload-by-stored" type="checkbox" />
               <span>By Stored Data</span>
             </label>
+            <label class="toggle">
+              <input id="testing-only-toggle" type="checkbox" />
+              <span>Testing only (no DB)</span>
+            </label>
           </div>
           <div class="status" id="upload-status">No file selected.</div>
           <div class="columns" id="upload-columns">Columns: —</div>
+          <button id="testing-save-btn" class="btn ghost" type="button" hidden>Save As Report</button>
         </article>
 
         <article class="card">
@@ -112,6 +120,15 @@
           <button id="report-btn" class="btn ghost">Open Report</button>
           <div class="status" id="report-preview">Loading report summary...</div>
         </article>
+
+        <article class="card settings-card" id="settings-card">
+          <header>
+            <h2>Settings</h2>
+            <p>Manage what happens after each automation run.</p>
+          </header>
+          <button id="settings-btn" class="btn ghost">Open Settings</button>
+          <div class="status settings-note">These settings apply to new batches.</div>
+        </article>
       </section>
 
       <section class="timeline card">
@@ -146,6 +163,13 @@
       </div>
     </div>
 
+    <div class="nav-arrows" aria-label="Page navigation">
+      <button class="nav-arrow" type="button" data-nav="back" aria-label="Go back">&lt;</button>
+      <button class="nav-arrow" type="button" data-nav="forward" aria-label="Go forward">&gt;</button>
+    </div>
+
+    <script src="theme.js"></script>
+    <script src="nav.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

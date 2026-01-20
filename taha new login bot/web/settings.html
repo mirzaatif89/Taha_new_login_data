@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TAHA Settings</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand brand-link" href="index.html" aria-label="Go to dashboard">
+        <div class="brand__logo">TAHA</div>
+        <div class="brand__text">
+          <span>College Automation</span>
+          <small>Student portal companion</small>
+        </div>
+      </a>
+      <div class="masthead__actions">
+        <div class="badge">Settings · Preferences · Reports</div>
+        <button id="refresh-btn" class="btn ghost small" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="panel grid-2">
+        <article class="card">
+          <header class="settings-header">
+            <h2>Settings</h2>
+            <p>Manage preferences for appearance, storage, and admin tools.</p>
+          </header>
+          <div class="settings-list">
+            <div class="settings-item">
+              <span>Theme</span>
+              <select id="theme-select" class="settings-control" aria-label="Theme">
+                <option value="light" selected>Light</option>
+                <option value="warm">Warm</option>
+                <option value="sand">Sand</option>
+                <option value="ember">Ember</option>
+                <option value="clay">Clay</option>
+                <option value="rose">Rose</option>
+                <option value="peach">Peach</option>
+                <option value="olive">Olive</option>
+                <option value="forest">Forest</option>
+                <option value="ocean">Ocean</option>
+                <option value="sky">Sky</option>
+                <option value="slate">Slate</option>
+                <option value="ink">Ink</option>
+                <option value="granite">Granite</option>
+                <option value="linen">Linen</option>
+                <option value="latte">Latte</option>
+                <option value="amber">Amber</option>
+                <option value="copper">Copper</option>
+                <option value="mint">Mint</option>
+                <option value="sage">Sage</option>
+                <option value="plum">Plum</option>
+                <option value="berry">Berry</option>
+                <option value="stone">Stone</option>
+                <option value="cloud">Cloud</option>
+                <option value="aurora">Aurora</option>
+                <option value="dark">Dark</option>
+              </select>
+            </div>
+            <div class="settings-item">
+              <span>Storage Delete</span>
+              <button id="storage-delete-btn" class="btn ghost small" type="button">Delete</button>
+            </div>
+            <div class="settings-item">
+              <span>Cache Date</span>
+              <div class="settings-actions">
+                <button id="cache-clear-btn" class="btn ghost small" type="button">Clear</button>
+              </div>
+            </div>
+            <div class="settings-item">
+              <span>Reset Data</span>
+              <button id="reset-data-btn" class="btn ghost small" type="button">Reset</button>
+            </div>
+            <div class="settings-item">
+              <span>Admin</span>
+              <button id="admin-open-btn" class="btn ghost small" type="button">Open</button>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <div class="modal" id="storage-modal" aria-hidden="true">
+      <div class="modal__card storage-modal" role="dialog" aria-labelledby="storage-modal-title">
+        <button class="modal__close" id="storage-modal-close" aria-label="Close storage modal">&times;</button>
+        <div class="modal__badge">Storage</div>
+        <h3 id="storage-modal-title">Select columns to delete</h3>
+        <div class="storage-grid">
+          <label class="toggle">
+            <input type="checkbox" />
+            <span>Credentials</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" />
+            <span>Login Status</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" />
+            <span>Attendance</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" />
+            <span>Credit Hours</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" />
+            <span>Template Uploads</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" />
+            <span>Report Logs</span>
+          </label>
+        </div>
+        <div class="modal__actions">
+          <button class="btn ghost small" type="button" id="storage-modal-cancel">Cancel</button>
+          <button class="btn primary small" type="button">Delete Selected</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" id="reset-modal" aria-hidden="true">
+      <div class="modal__card" role="dialog" aria-labelledby="reset-modal-title">
+        <button class="modal__close" id="reset-modal-close" aria-label="Close reset modal">&times;</button>
+        <div class="modal__badge">Reset</div>
+        <h3 id="reset-modal-title">Confirm admin password</h3>
+        <div class="field">
+          <label for="reset-password">Admin password</label>
+          <input id="reset-password" type="password" autocomplete="current-password" />
+        </div>
+        <div class="status" id="reset-status"></div>
+        <div class="modal__actions">
+          <button class="btn ghost small" type="button" id="reset-modal-cancel">Cancel</button>
+          <button class="btn primary small" type="button" id="reset-modal-confirm">Reset Now</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="nav-arrows" aria-label="Page navigation">
+      <button class="nav-arrow" type="button" data-nav="back" aria-label="Go back">&lt;</button>
+      <button class="nav-arrow" type="button" data-nav="forward" aria-label="Go forward">&gt;</button>
+    </div>
+
+    <script src="nav.js"></script>
+    <script src="refresh.js"></script>
+    <script src="theme.js"></script>
+    <script>
+      const adminOpenBtn = document.getElementById("admin-open-btn");
+      const storageDeleteBtn = document.getElementById("storage-delete-btn");
+      const storageModal = document.getElementById("storage-modal");
+      const storageModalClose = document.getElementById("storage-modal-close");
+      const storageModalCancel = document.getElementById("storage-modal-cancel");
+      const resetDataBtn = document.getElementById("reset-data-btn");
+      const resetModal = document.getElementById("reset-modal");
+      const resetModalClose = document.getElementById("reset-modal-close");
+      const resetModalCancel = document.getElementById("reset-modal-cancel");
+      const resetModalConfirm = document.getElementById("reset-modal-confirm");
+      const resetPasswordInput = document.getElementById("reset-password");
+      const resetStatus = document.getElementById("reset-status");
+      const cacheClearBtn = document.getElementById("cache-clear-btn");
+      if (adminOpenBtn) {
+        adminOpenBtn.addEventListener("click", () => {
+          if (typeof window.navigateTo === "function") {
+            window.navigateTo("admin.html");
+            return;
+          }
+          window.location.href = "admin.html";
+        });
+      }
+      function closeStorageModal() {
+        if (!storageModal) return;
+        storageModal.classList.remove("show");
+        storageModal.setAttribute("aria-hidden", "true");
+      }
+      function openStorageModal() {
+        if (!storageModal) return;
+        storageModal.classList.add("show");
+        storageModal.setAttribute("aria-hidden", "false");
+      }
+      if (storageDeleteBtn) {
+        storageDeleteBtn.addEventListener("click", openStorageModal);
+      }
+      if (storageModalClose) {
+        storageModalClose.addEventListener("click", closeStorageModal);
+      }
+      if (storageModalCancel) {
+        storageModalCancel.addEventListener("click", closeStorageModal);
+      }
+      if (storageModal) {
+        storageModal.addEventListener("click", (event) => {
+          if (event.target === storageModal) {
+            closeStorageModal();
+          }
+        });
+      }
+
+      function openResetModal() {
+        if (!resetModal) return;
+        resetModal.classList.add("show");
+        resetModal.setAttribute("aria-hidden", "false");
+        if (resetPasswordInput) {
+          resetPasswordInput.value = "";
+          resetPasswordInput.focus();
+        }
+        if (resetStatus) resetStatus.textContent = "";
+      }
+
+      function closeResetModal() {
+        if (!resetModal) return;
+        resetModal.classList.remove("show");
+        resetModal.setAttribute("aria-hidden", "true");
+      }
+
+      function getAdminPassword() {
+        try {
+          const raw = localStorage.getItem("taha-admin");
+          if (raw) {
+            const admin = JSON.parse(raw);
+            return admin && admin.password ? admin.password : "";
+          }
+          return localStorage.getItem("taha-admin-password") || "";
+        } catch (error) {
+          return "";
+        }
+      }
+
+      function keepAdminPassword(password) {
+        try {
+          let admin = null;
+          try {
+            const raw = localStorage.getItem("taha-admin");
+            admin = raw ? JSON.parse(raw) : null;
+          } catch (innerError) {
+            admin = null;
+          }
+          localStorage.clear();
+          if (admin && admin.password) {
+            localStorage.setItem("taha-admin", JSON.stringify(admin));
+          } else if (password) {
+            localStorage.setItem("taha-admin-password", password);
+          }
+        } catch (error) {
+          // Ignore storage failures.
+        }
+      }
+
+      function handleResetConfirm() {
+        if (!resetStatus) return;
+        const stored = getAdminPassword();
+        const entered = resetPasswordInput ? resetPasswordInput.value : "";
+        if (!stored) {
+          resetStatus.textContent = "Admin password is not set.";
+          return;
+        }
+        if (!entered || entered !== stored) {
+          resetStatus.textContent = "Invalid admin password.";
+          return;
+        }
+        keepAdminPassword(stored);
+        resetStatus.textContent = "Reset completed.";
+        closeResetModal();
+        if (typeof window.navigateReload === "function") {
+          window.navigateReload();
+          return;
+        }
+        window.location.reload();
+      }
+
+      if (resetDataBtn) resetDataBtn.addEventListener("click", openResetModal);
+      if (resetModalClose) resetModalClose.addEventListener("click", closeResetModal);
+      if (resetModalCancel) resetModalCancel.addEventListener("click", closeResetModal);
+      if (resetModalConfirm) resetModalConfirm.addEventListener("click", handleResetConfirm);
+      if (resetModal) {
+        resetModal.addEventListener("click", (event) => {
+          if (event.target === resetModal) {
+            closeResetModal();
+          }
+        });
+      }
+
+      function clearAppCache() {
+        try {
+          let admin = null;
+          try {
+            const raw = localStorage.getItem("taha-admin");
+            admin = raw ? JSON.parse(raw) : null;
+          } catch (innerError) {
+            admin = null;
+          }
+          const adminPass = localStorage.getItem("taha-admin-password");
+          localStorage.clear();
+          if (admin && admin.password) {
+            localStorage.setItem("taha-admin", JSON.stringify(admin));
+          } else if (adminPass) {
+            localStorage.setItem("taha-admin-password", adminPass);
+          }
+        } catch (error) {
+          // Ignore storage failures.
+        }
+      }
+
+      if (cacheClearBtn) {
+        cacheClearBtn.addEventListener("click", () => {
+          clearAppCache();
+        });
+      }
+    </script>
+  </body>
+</html>
