@@ -1,6 +1,21 @@
-const ADMIN_KEY = "taha-admin";
-const LEGACY_ADMIN_KEY = "taha-admin-password";
-const ADMIN_LIST_KEY = "taha-admins";
+const PORTAL_KEY = "taha-portal";
+const FALLBACK_ADMIN_KEY = "taha-admin";
+const FALLBACK_ADMIN_LIST_KEY = "taha-admins";
+const FALLBACK_LEGACY_KEY = "taha-admin-password";
+
+function getPortal() {
+  try {
+    return localStorage.getItem(PORTAL_KEY) || "connect";
+  } catch (error) {
+    return "connect";
+  }
+}
+
+const PORTAL = getPortal();
+const ADMIN_KEY = `taha-admin-${PORTAL}`;
+const LEGACY_ADMIN_KEY = `taha-admin-password-${PORTAL}`;
+const ADMIN_LIST_KEY = `taha-admins-${PORTAL}`;
+const ADMIN_SESSION_KEY = `taha-admin-session-${PORTAL}`;
 
 const setupModal = document.getElementById("admin-setup-modal");
 const setupClose = document.getElementById("admin-setup-close");
@@ -55,7 +70,7 @@ let adminLocked = false;
 
 function isAdminSessionActive() {
   try {
-    return localStorage.getItem("taha-admin-session") === "active";
+    return localStorage.getItem(ADMIN_SESSION_KEY) === "active";
   } catch (error) {
     return false;
   }
@@ -64,9 +79,9 @@ function isAdminSessionActive() {
 function setAdminSession(active) {
   try {
     if (active) {
-      localStorage.setItem("taha-admin-session", "active");
+      localStorage.setItem(ADMIN_SESSION_KEY, "active");
     } else {
-      localStorage.removeItem("taha-admin-session");
+      localStorage.removeItem(ADMIN_SESSION_KEY);
     }
   } catch (error) {
     // Ignore storage failures.
@@ -310,6 +325,28 @@ function showWelcomeOverlay() {
 function initAdminSetup() {
   try {
     localStorage.removeItem(LEGACY_ADMIN_KEY);
+  } catch (error) {
+    // Ignore storage failures.
+  }
+  try {
+    if (!localStorage.getItem(ADMIN_KEY)) {
+      const legacy = localStorage.getItem(FALLBACK_ADMIN_KEY);
+      if (legacy) {
+        localStorage.setItem(ADMIN_KEY, legacy);
+      }
+    }
+    if (!localStorage.getItem(ADMIN_LIST_KEY)) {
+      const legacyList = localStorage.getItem(FALLBACK_ADMIN_LIST_KEY);
+      if (legacyList) {
+        localStorage.setItem(ADMIN_LIST_KEY, legacyList);
+      }
+    }
+    if (!localStorage.getItem(LEGACY_ADMIN_KEY)) {
+      const legacyPass = localStorage.getItem(FALLBACK_LEGACY_KEY);
+      if (legacyPass) {
+        localStorage.setItem(LEGACY_ADMIN_KEY, legacyPass);
+      }
+    }
   } catch (error) {
     // Ignore storage failures.
   }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from datetime import datetime
 import shutil
 import sqlite3
@@ -8,14 +9,19 @@ import sqlite3
 import webview
 
 from utility import (
-    DB_PATH,
+    RESOURCE_DIR,
     _init_db,
     _ensure_parent,
     REPORTS_DIR,
+    delete_storage_data,
     download_template,
+    get_db_path,
     load_credentials_from_db,
     load_credentials,
     run_login_batch,
+    run_zoom_portal,
+    set_active_portal,
+    reset_all_data,
     save_login_course_report,
     save_login_status_report,
     store_credentials_in_db,
@@ -24,10 +30,10 @@ from utility import (
 
 
 APP_TITLE = "TAHA College Detail Bot"
-BASE_DIR = Path(__file__).resolve().parent
-WEB_DIR = BASE_DIR / "web"
-TEMPLATE_SOURCE = BASE_DIR / "login_template.xlsx"
+WEB_DIR = RESOURCE_DIR / "web"
+TEMPLATE_SOURCE = RESOURCE_DIR / "templates" / "login_template.xlsx"
 LOGIN_URL = "https://students.tahacollege.ca/studentportal/login/?msg="
+ZOOM_PORTAL_URL = "https://students.tahacollege.ca/studentportal/s/"
 
 
 class Api:
@@ -35,6 +41,8 @@ class Api:
         # Keep Path private so pywebview does not try to serialize it
         self._template_source = Path(template_source)
         self.upload_path = ""
+        self.zoom_path = ""
+        self.zoom_credentials = []
 
     @staticmethod
     def _read_columns(file_path: Path):
@@ -78,6 +86,74 @@ class Api:
                 "error": f"Failed to read columns: {exc}",
             }
 
+    def select_zoom_file(self):
+        file_types = (
+            "Excel Files (*.xlsx;*.xls;*.xlsm)",
+            "CSV Files (*.csv)",
+            "All Files (*.*)",
+        )
+        selection = webview.windows[0].create_file_dialog(
+            webview.FileDialog.OPEN, allow_multiple=False, file_types=file_types
+        )
+        if not selection:
+            self.zoom_credentials = []
+            self.zoom_path = ""
+            return {"total": 0, "path": "", "name": "", "error": ""}
+
+        selected_path = Path(selection[0])
+        self.zoom_path = str(selected_path)
+        try:
+            credentials = load_credentials(
+                selected_path, id_column="Username", password_column="Password"
+            )
+        except Exception as exc:
+            self.zoom_credentials = []
+            return {
+                "total": 0,
+                "path": str(selected_path),
+                "name": selected_path.name,
+                "error": str(exc),
+            }
+        if not credentials:
+            self.zoom_credentials = []
+            return {
+                "total": 0,
+                "path": str(selected_path),
+                "name": selected_path.name,
+                "error": "No credentials found.",
+            }
+
+        self.zoom_credentials = credentials
+        return {
+            "total": len(credentials),
+            "path": str(selected_path),
+            "name": selected_path.name,
+            "error": "",
+        }
+
+    def open_zoom_portal(self):
+        if not self.zoom_credentials:
+            return {"error": "Upload your Zoom Excel file first."}
+
+        first = self.zoom_credentials[0] or {}
+        username = str(first.get("username") or first.get("id") or "").strip()
+        password = str(first.get("password") or "").strip()
+        if not username or not password:
+            return {"error": "Excel file must include Username and Password columns."}
+
+        def _open_and_fill():
+            try:
+                run_zoom_portal(
+                    self.zoom_credentials,
+                    portal_url=ZOOM_PORTAL_URL,
+                    target_xpath="/html/body/section[3]/div/div/div[1]/div/div[1]/div/div",
+                )
+            except Exception:
+                pass
+
+        threading.Thread(target=_open_and_fill, daemon=True).start()
+        return {"opened": True, "error": ""}
+
     def save_template(self):
         file_types = ("Excel Files (*.xlsx)", "All Files (*.*)")
         selection = webview.windows[0].create_file_dialog(
@@ -94,6 +170,35 @@ class Api:
             default_filename="login_template.xlsx",
             target_path=selected_path,
         )
+
+    def set_portal(self, portal: str):
+        return {"portal": set_active_portal(portal)}
+
+    def import_credentials_file(self):
+        file_types = (
+            "Excel Files (*.xlsx;*.xls;*.xlsm)",
+            "CSV Files (*.csv)",
+            "All Files (*.*)",
+        )
+        selection = webview.windows[0].create_file_dialog(
+            webview.FileDialog.OPEN, allow_multiple=False, file_types=file_types
+        )
+        if not selection:
+            return {"total": 0, "path": "", "error": "Import cancelled."}
+        selected_path = Path(selection[0])
+        try:
+            credentials = load_credentials(
+                selected_path, id_column="Username", password_column="Password"
+            )
+        except Exception as exc:
+            return {"total": 0, "path": str(selected_path), "error": str(exc)}
+        if not credentials:
+            return {"total": 0, "path": str(selected_path), "error": "No credentials found."}
+        try:
+            store_credentials_in_db(credentials)
+        except Exception as exc:
+            return {"total": 0, "path": str(selected_path), "error": str(exc)}
+        return {"total": len(credentials), "path": str(selected_path), "error": ""}
 
     def _normalize_query(self, value: str) -> str:
         return str(value or "").strip().lower()
@@ -220,6 +325,7 @@ class Api:
         options = options or {}
         concurrency = int(options.get("threads", 1) or 1)
         incognito = bool(options.get("incognito", False))
+        headless = bool(options.get("headless", False))
         mode = options.get("mode") or "attendance"
         source = options.get("source") or "file"
         testing = bool(options.get("testing", False))
@@ -256,6 +362,7 @@ class Api:
                 login_url=LOGIN_URL,
                 concurrency=concurrency,
                 incognito=incognito,
+                headless=headless,
                 mode=mode,
                 store_results=not testing,
             )
@@ -336,7 +443,7 @@ class Api:
     def get_report_data(self, limit: int = 200):
         safe_limit = max(1, int(limit or 200))
         _init_db()
-        if not DB_PATH.is_file():
+        if not get_db_path().is_file():
             return {
                 "login_results": [],
                 "report_logs": [],
@@ -346,7 +453,7 @@ class Api:
                 "limit": safe_limit,
             }
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             login_rows = conn.execute(
                 """
@@ -455,7 +562,7 @@ class Api:
         if not old_username or not new_username:
             return {"saved": False, "error": "Username is required."}
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             existing = conn.execute(
                 "SELECT id FROM credentials WHERE username = ?",
@@ -478,13 +585,24 @@ class Api:
             return {"saved": False, "error": "Credential not found."}
         return {"saved": True, "error": ""}
 
+    def add_credential(self, username: str, password: str):
+        username = (username or "").strip()
+        password = (password or "").strip()
+        if not username or not password:
+            return {"saved": False, "error": "Username and password are required."}
+        try:
+            store_credentials_in_db([{"id": username, "username": username, "password": password}])
+        except Exception as exc:
+            return {"saved": False, "error": str(exc)}
+        return {"saved": True, "error": ""}
+
     def delete_credential(self, username: str):
         _init_db()
         username = (username or "").strip()
         if not username:
             return {"deleted": False, "error": "Username is required."}
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             cursor = conn.execute(
                 "DELETE FROM credentials WHERE username = ?",
                 (username,),
@@ -502,7 +620,7 @@ class Api:
         except (TypeError, ValueError):
             return {"saved": False, "error": "Invalid record id."}
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             cursor = conn.execute(
                 """
                 UPDATE login_results
@@ -535,7 +653,7 @@ class Api:
         ]
         updates = {key: str(payload.get(key, "")).strip() for key in allowed}
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             cursor = conn.execute(
                 """
                 UPDATE login_results
@@ -567,7 +685,7 @@ class Api:
         except (TypeError, ValueError):
             return {"saved": False, "error": "Invalid record id."}
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             cursor = conn.execute(
                 """
                 UPDATE login_results
@@ -589,7 +707,7 @@ class Api:
         except (TypeError, ValueError):
             return {"deleted": False, "error": "Invalid record id."}
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             cursor = conn.execute(
                 "DELETE FROM login_results WHERE id = ?",
                 (row_id,),
@@ -606,7 +724,7 @@ class Api:
         if not username:
             return {"deleted": False, "error": "Username is required."}
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             cursor = conn.execute(
                 "DELETE FROM login_results WHERE username = ?",
                 (username,),
@@ -619,10 +737,10 @@ class Api:
 
     def get_report_summary(self):
         _init_db()
-        if not DB_PATH.is_file():
+        if not get_db_path().is_file():
             return {"login_total": 0, "report_total": 0, "latest_report": None, "credential_total": 0}
 
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             login_total = conn.execute("SELECT COUNT(*) AS total FROM login_results").fetchone()["total"]
             report_total = conn.execute("SELECT COUNT(*) AS total FROM report_logs").fetchone()["total"]
@@ -655,11 +773,17 @@ class Api:
 
     def get_credentials_count(self):
         _init_db()
-        if not DB_PATH.is_file():
+        if not get_db_path().is_file():
             return {"total": 0}
-        with sqlite3.connect(DB_PATH) as conn:
+        with sqlite3.connect(get_db_path()) as conn:
             total = conn.execute("SELECT COUNT(*) FROM credentials").fetchone()[0]
         return {"total": int(total or 0)}
+
+    def delete_storage(self, options: dict):
+        return delete_storage_data(options or {})
+
+    def reset_all_data(self):
+        return reset_all_data()
 
 
 def main():

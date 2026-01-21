@@ -18,6 +18,14 @@ const deleteSelectedBtn = document.getElementById("detail-delete-selected");
 const successFilter = document.getElementById("detail-success-filter");
 const startDateInput = document.getElementById("detail-start-date");
 const endDateInput = document.getElementById("detail-end-date");
+const credentialsAction = document.getElementById("credentials-action");
+const credentialModal = document.getElementById("credential-modal");
+const credentialModalClose = document.getElementById("credential-modal-close");
+const credentialModalCancel = document.getElementById("credential-modal-cancel");
+const credentialModalSave = document.getElementById("credential-modal-save");
+const credentialUsername = document.getElementById("credential-username");
+const credentialPassword = document.getElementById("credential-password");
+const credentialModalStatus = document.getElementById("credential-modal-status");
 
 const urlParams = new URLSearchParams(window.location.search);
 let queryParam = String(urlParams.get("q") || "").trim().toLowerCase();
@@ -209,6 +217,74 @@ function filterRows(rows, field) {
     const value = row[field];
     return String(value || "").toLowerCase().includes(queryParam);
   });
+}
+
+function openCredentialModal() {
+  if (!credentialModal) return;
+  credentialModal.classList.add("show");
+  credentialModal.setAttribute("aria-hidden", "false");
+  if (credentialUsername) credentialUsername.value = "";
+  if (credentialPassword) credentialPassword.value = "";
+  if (credentialModalStatus) credentialModalStatus.textContent = "";
+  if (credentialUsername) credentialUsername.focus();
+}
+
+function closeCredentialModal() {
+  if (!credentialModal) return;
+  credentialModal.classList.remove("show");
+  credentialModal.setAttribute("aria-hidden", "true");
+}
+
+async function handleImportCredentials() {
+  if (!api || typeof api.import_credentials_file !== "function") {
+    setStatus("Import API not available. Restart the app.");
+    return;
+  }
+  try {
+    setStatus("Importing credentials...");
+    const result = await safeCall(
+      () => api.import_credentials_file(),
+      "Failed to import credentials."
+    );
+    if (!result || result.error) {
+      setStatus((result && result.error) || "Failed to import credentials.");
+      return;
+    }
+    setStatus(`Imported ${result.total || 0} credential(s).`);
+    loadDetail();
+  } catch (error) {
+    setStatus(error.message || "Failed to import credentials.");
+  }
+}
+
+async function handleAddClientSave() {
+  if (!credentialModalStatus) return;
+  if (!api || typeof api.add_credential !== "function") {
+    credentialModalStatus.textContent = "Add client API not available. Restart the app.";
+    return;
+  }
+  const username = (credentialUsername && credentialUsername.value || "").trim();
+  const password = credentialPassword ? credentialPassword.value : "";
+  if (!username || !password) {
+    credentialModalStatus.textContent = "Username and password are required.";
+    return;
+  }
+  try {
+    const result = await safeCall(
+      () => api.add_credential(username, password),
+      "Failed to add client."
+    );
+    if (!result || !result.saved) {
+      credentialModalStatus.textContent = (result && result.error) || "Failed to add client.";
+      return;
+    }
+    credentialModalStatus.textContent = "Client saved.";
+    closeCredentialModal();
+    setStatus("Client saved.");
+    loadDetail();
+  } catch (error) {
+    credentialModalStatus.textContent = error.message || "Failed to add client.";
+  }
 }
 
 function normalizeFilterValue(value) {
@@ -914,4 +990,33 @@ async function handleDeleteSelected() {
 
 if (deleteSelectedBtn) {
   deleteSelectedBtn.addEventListener("click", handleDeleteSelected);
+}
+
+if (credentialsAction) {
+  credentialsAction.addEventListener("change", () => {
+    const value = credentialsAction.value;
+    if (value === "import-file") {
+      handleImportCredentials();
+    } else if (value === "add-client") {
+      openCredentialModal();
+    }
+    credentialsAction.value = "";
+  });
+}
+
+if (credentialModalClose) {
+  credentialModalClose.addEventListener("click", closeCredentialModal);
+}
+if (credentialModalCancel) {
+  credentialModalCancel.addEventListener("click", closeCredentialModal);
+}
+if (credentialModalSave) {
+  credentialModalSave.addEventListener("click", handleAddClientSave);
+}
+if (credentialModal) {
+  credentialModal.addEventListener("click", (event) => {
+    if (event.target === credentialModal) {
+      closeCredentialModal();
+    }
+  });
 }

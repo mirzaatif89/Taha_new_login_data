@@ -199,6 +199,21 @@
     <script src="refresh.js"></script>
     <script src="admin.js"></script>
     <script>
+      const PORTAL_KEY = "taha-portal";
+      const FALLBACK_ADMIN_KEY = "taha-admin";
+      const FALLBACK_ADMIN_LIST_KEY = "taha-admins";
+      const FALLBACK_LEGACY_KEY = "taha-admin-password";
+      function getPortal() {
+        try {
+          return localStorage.getItem(PORTAL_KEY) || "connect";
+        } catch (error) {
+          return "connect";
+        }
+      }
+      const PORTAL = getPortal();
+      const ADMIN_KEY = `taha-admin-${PORTAL}`;
+      const ADMIN_LIST_KEY = `taha-admins-${PORTAL}`;
+      const LEGACY_ADMIN_KEY = `taha-admin-password-${PORTAL}`;
       const adminResetBtn = document.getElementById("admin-reset-btn");
       const adminResetModal = document.getElementById("admin-reset-modal");
       const adminResetClose = document.getElementById("admin-reset-close");
@@ -225,12 +240,12 @@
 
       function getAdminPassword() {
         try {
-          const raw = localStorage.getItem("taha-admin");
+          const raw = localStorage.getItem(ADMIN_KEY) || localStorage.getItem(FALLBACK_ADMIN_KEY);
           if (raw) {
             const admin = JSON.parse(raw);
             return admin && admin.password ? admin.password : "";
           }
-          return localStorage.getItem("taha-admin-password") || "";
+          return localStorage.getItem(LEGACY_ADMIN_KEY) || localStorage.getItem(FALLBACK_LEGACY_KEY) || "";
         } catch (error) {
           return "";
         }
@@ -241,22 +256,39 @@
           let admin = null;
           let admins = null;
           try {
-            const raw = localStorage.getItem("taha-admin");
+            const raw = localStorage.getItem(ADMIN_KEY);
             admin = raw ? JSON.parse(raw) : null;
-            const listRaw = localStorage.getItem("taha-admins");
+            const listRaw = localStorage.getItem(ADMIN_LIST_KEY);
             admins = listRaw ? JSON.parse(listRaw) : null;
           } catch (innerError) {
             admin = null;
             admins = null;
           }
-          localStorage.clear();
           if (admin && admin.password) {
-            localStorage.setItem("taha-admin", JSON.stringify(admin));
+            localStorage.setItem(ADMIN_KEY, JSON.stringify(admin));
             if (Array.isArray(admins)) {
-              localStorage.setItem("taha-admins", JSON.stringify(admins));
+              localStorage.setItem(ADMIN_LIST_KEY, JSON.stringify(admins));
             }
           } else if (password) {
-            localStorage.setItem("taha-admin-password", password);
+            localStorage.setItem(LEGACY_ADMIN_KEY, password);
+          }
+          if (!admin) {
+            const legacy = localStorage.getItem(FALLBACK_ADMIN_KEY);
+            if (legacy) {
+              localStorage.setItem(ADMIN_KEY, legacy);
+            }
+          }
+          if (!admins) {
+            const legacyList = localStorage.getItem(FALLBACK_ADMIN_LIST_KEY);
+            if (legacyList) {
+              localStorage.setItem(ADMIN_LIST_KEY, legacyList);
+            }
+          }
+          if (!password) {
+            const legacyPass = localStorage.getItem(FALLBACK_LEGACY_KEY);
+            if (legacyPass) {
+              localStorage.setItem(LEGACY_ADMIN_KEY, legacyPass);
+            }
           }
         } catch (error) {
           // Ignore storage failures.

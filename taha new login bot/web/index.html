@@ -6,7 +6,7 @@
     <title>TAHA College Detail Bot</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
+  <body data-portal="connect">
     <header class="masthead">
       <a class="brand brand-link" href="index.html" aria-label="Go to dashboard">
         <div class="brand__logo">TAHA</div>
@@ -52,6 +52,23 @@
       </section>
 
       <section class="panel grid-3">
+        <article class="card">
+          <header>
+            <h2>Select Portal</h2>
+            <p>Choose the portal before starting the upload.</p>
+          </header>
+          <div class="field">
+            <label class="toggle">
+              <input id="portal-canvas" type="radio" name="portal-select" />
+              <span>Canvas Portal</span>
+            </label>
+            <label class="toggle">
+              <input id="portal-connect" type="radio" name="portal-select" />
+              <span>Connect Portal</span>
+            </label>
+          </div>
+        </article>
+
         <article class="card">
           <header>
             <h2>Upload</h2>
@@ -107,9 +124,27 @@
             <input id="log-attendance-status" type="checkbox" />
             <span>Show attendance status</span>
           </label>
+          <label class="switch">
+            <span>Headless (no browser UI)</span>
+            <input id="headless-toggle" type="checkbox" />
+            <span class="switch__track" aria-hidden="true">
+              <span class="switch__thumb"></span>
+            </span>
+          </label>
           <button id="login-btn" class="btn primary">Login</button>
           <div class="status" id="login-status">Not started.</div>
           <div class="status" id="login-time">Time: —</div>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>Zoom Classes Login</h2>
+            <p>Manage Zoom class logins alongside your browser batches.</p>
+          </header>
+          <button class="btn ghost" type="button" id="zoom-join-btn">Join Zoom Classes</button>
+          <button class="btn primary" type="button" id="zoom-upload-btn">Upload File</button>
+          <div class="status" id="zoom-upload-status">No file selected.</div>
+          <div class="status">Setup coming soon.</div>
         </article>
 
         <article class="card" id="report-card">

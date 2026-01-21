@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&display=swap");
+
 :root {
   color-scheme: light;
   --ink: #1f1d1a;
@@ -25,7 +27,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+  font-family: "Ubuntu", "Segoe UI", Tahoma, sans-serif;
   color: var(--ink);
   background: radial-gradient(circle at top, var(--bg-start) 0%, var(--bg-mid) 35%, var(--bg-end) 100%);
   overflow-x: hidden;
@@ -571,39 +573,56 @@ body.page-turn::before {
 .toggle input {
   width: 18px;
   height: 18px;
-  appearance: none;
-  border-radius: 5px;
-  border: 2px solid rgba(208, 106, 58, 0.55);
-  background: rgba(255, 255, 255, 0.9);
-  display: inline-grid;
-  place-items: center;
   cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease,
-    transform 0.12s ease;
+  accent-color: var(--accent);
 }
 
-.toggle input::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+.switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch__track {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(208, 106, 58, 0.2);
+  border: 1px solid rgba(208, 106, 58, 0.4);
+  transition: background 0.2s ease, border-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
   background: #fff;
-  transform: scale(0);
-  transition: transform 0.12s ease;
+  box-shadow: 0 3px 8px rgba(41, 28, 15, 0.2);
+  transition: transform 0.2s ease;
 }
 
-.toggle input:checked {
+.switch input:checked + .switch__track {
   background: linear-gradient(135deg, #e0804b, #c55d30);
   border-color: #b6542c;
-  box-shadow: 0 4px 10px rgba(208, 106, 58, 0.22);
 }
 
-.toggle input:checked::before {
-  transform: scale(1);
-}
-
-.toggle input:active {
-  transform: scale(0.96);
+.switch input:checked + .switch__track .switch__thumb {
+  transform: translateX(20px);
 }
 
 .timeline {

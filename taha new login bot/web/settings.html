@@ -74,6 +74,7 @@
               <span>Reset Data</span>
               <button id="reset-data-btn" class="btn ghost small" type="button">Reset</button>
             </div>
+            <div class="status" id="settings-status"></div>
             <div class="settings-item">
               <span>Admin</span>
               <button id="admin-open-btn" class="btn ghost small" type="button">Open</button>
@@ -90,33 +91,33 @@
         <h3 id="storage-modal-title">Select columns to delete</h3>
         <div class="storage-grid">
           <label class="toggle">
-            <input type="checkbox" />
+            <input id="storage-credentials" type="checkbox" />
             <span>Credentials</span>
           </label>
           <label class="toggle">
-            <input type="checkbox" />
+            <input id="storage-login-status" type="checkbox" />
             <span>Login Status</span>
           </label>
           <label class="toggle">
-            <input type="checkbox" />
+            <input id="storage-attendance" type="checkbox" />
             <span>Attendance</span>
           </label>
           <label class="toggle">
-            <input type="checkbox" />
+            <input id="storage-credit-hours" type="checkbox" />
             <span>Credit Hours</span>
           </label>
           <label class="toggle">
-            <input type="checkbox" />
+            <input id="storage-template-uploads" type="checkbox" />
             <span>Template Uploads</span>
           </label>
           <label class="toggle">
-            <input type="checkbox" />
+            <input id="storage-report-logs" type="checkbox" />
             <span>Report Logs</span>
           </label>
         </div>
         <div class="modal__actions">
           <button class="btn ghost small" type="button" id="storage-modal-cancel">Cancel</button>
-          <button class="btn primary small" type="button">Delete Selected</button>
+          <button class="btn primary small" type="button" id="storage-modal-confirm">Delete Selected</button>
         </div>
       </div>
     </div>
@@ -147,11 +148,48 @@
     <script src="refresh.js"></script>
     <script src="theme.js"></script>
     <script>
+      let api = null;
+      const PORTAL_KEY = "taha-portal";
+      const FALLBACK_ADMIN_KEY = "taha-admin";
+      const FALLBACK_ADMIN_LIST_KEY = "taha-admins";
+      const FALLBACK_LEGACY_KEY = "taha-admin-password";
+      function getPortal() {
+        try {
+          return localStorage.getItem(PORTAL_KEY) || "connect";
+        } catch (error) {
+          return "connect";
+        }
+      }
+      const PORTAL = getPortal();
+      const ADMIN_KEY = `taha-admin-${PORTAL}`;
+      const ADMIN_LIST_KEY = `taha-admins-${PORTAL}`;
+      const LEGACY_ADMIN_KEY = `taha-admin-password-${PORTAL}`;
+      function bindApi() {
+        if (window.pywebview && window.pywebview.api) {
+          api = window.pywebview.api;
+        }
+      }
+      bindApi();
+      window.addEventListener("pywebviewready", bindApi);
+
+      async function safeCall(fn, fallbackMessage) {
+        if (!api) {
+          throw new Error("Python API is initializing… please retry.");
+        }
+        try {
+          return await fn();
+        } catch (error) {
+          console.error(error);
+          throw new Error(error.message || fallbackMessage || "Unexpected error.");
+        }
+      }
+
       const adminOpenBtn = document.getElementById("admin-open-btn");
       const storageDeleteBtn = document.getElementById("storage-delete-btn");
       const storageModal = document.getElementById("storage-modal");
       const storageModalClose = document.getElementById("storage-modal-close");
       const storageModalCancel = document.getElementById("storage-modal-cancel");
+      const storageModalConfirm = document.getElementById("storage-modal-confirm");
       const resetDataBtn = document.getElementById("reset-data-btn");
       const resetModal = document.getElementById("reset-modal");
       const resetModalClose = document.getElementById("reset-modal-close");
@@ -160,6 +198,13 @@
       const resetPasswordInput = document.getElementById("reset-password");
       const resetStatus = document.getElementById("reset-status");
       const cacheClearBtn = document.getElementById("cache-clear-btn");
+      const settingsStatus = document.getElementById("settings-status");
+      const storageCredentials = document.getElementById("storage-credentials");
+      const storageLoginStatus = document.getElementById("storage-login-status");
+      const storageAttendance = document.getElementById("storage-attendance");
+      const storageCreditHours = document.getElementById("storage-credit-hours");
+      const storageTemplateUploads = document.getElementById("storage-template-uploads");
+      const storageReportLogs = document.getElementById("storage-report-logs");
       if (adminOpenBtn) {
         adminOpenBtn.addEventListener("click", () => {
           if (typeof window.navigateTo === "function") {
@@ -196,6 +241,45 @@
         });
       }
 
+      async function handleStorageDelete() {
+        if (!settingsStatus) return;
+        if (!api || typeof api.delete_storage !== "function") {
+          settingsStatus.textContent = "Storage delete API not available. Restart the app.";
+          return;
+        }
+        const payload = {
+          credentials: !!(storageCredentials && storageCredentials.checked),
+          login_status: !!(storageLoginStatus && storageLoginStatus.checked),
+          attendance: !!(storageAttendance && storageAttendance.checked),
+          credit_hours: !!(storageCreditHours && storageCreditHours.checked),
+          template_uploads: !!(storageTemplateUploads && storageTemplateUploads.checked),
+          report_logs: !!(storageReportLogs && storageReportLogs.checked),
+        };
+        if (!Object.values(payload).some(Boolean)) {
+          settingsStatus.textContent = "Select at least one storage item to delete.";
+          return;
+        }
+        try {
+          settingsStatus.textContent = "Deleting selected storage...";
+          const result = await safeCall(
+            () => api.delete_storage(payload),
+            "Failed to delete selected storage."
+          );
+          if (result && result.error) {
+            settingsStatus.textContent = result.error;
+            return;
+          }
+          settingsStatus.textContent = "Selected storage deleted.";
+          closeStorageModal();
+        } catch (error) {
+          settingsStatus.textContent = error.message || "Failed to delete selected storage.";
+        }
+      }
+
+      if (storageModalConfirm) {
+        storageModalConfirm.addEventListener("click", handleStorageDelete);
+      }
+
       function openResetModal() {
         if (!resetModal) return;
         resetModal.classList.add("show");
@@ -215,12 +299,12 @@
 
       function getAdminPassword() {
         try {
-          const raw = localStorage.getItem("taha-admin");
+          const raw = localStorage.getItem(ADMIN_KEY) || localStorage.getItem(FALLBACK_ADMIN_KEY);
           if (raw) {
             const admin = JSON.parse(raw);
             return admin && admin.password ? admin.password : "";
           }
-          return localStorage.getItem("taha-admin-password") || "";
+          return localStorage.getItem(LEGACY_ADMIN_KEY) || localStorage.getItem(FALLBACK_LEGACY_KEY) || "";
         } catch (error) {
           return "";
         }
@@ -230,16 +314,31 @@
         try {
           let admin = null;
           try {
-            const raw = localStorage.getItem("taha-admin");
+            const raw = localStorage.getItem(ADMIN_KEY);
             admin = raw ? JSON.parse(raw) : null;
           } catch (innerError) {
             admin = null;
           }
-          localStorage.clear();
           if (admin && admin.password) {
-            localStorage.setItem("taha-admin", JSON.stringify(admin));
+            localStorage.setItem(ADMIN_KEY, JSON.stringify(admin));
           } else if (password) {
-            localStorage.setItem("taha-admin-password", password);
+            localStorage.setItem(LEGACY_ADMIN_KEY, password);
+          }
+          if (!admin) {
+            const legacy = localStorage.getItem(FALLBACK_ADMIN_KEY);
+            if (legacy) {
+              localStorage.setItem(ADMIN_KEY, legacy);
+            }
+          }
+          const legacyList = localStorage.getItem(FALLBACK_ADMIN_LIST_KEY);
+          if (legacyList && !localStorage.getItem(ADMIN_LIST_KEY)) {
+            localStorage.setItem(ADMIN_LIST_KEY, legacyList);
+          }
+          if (!password) {
+            const legacyPass = localStorage.getItem(FALLBACK_LEGACY_KEY);
+            if (legacyPass) {
+              localStorage.setItem(LEGACY_ADMIN_KEY, legacyPass);
+            }
           }
         } catch (error) {
           // Ignore storage failures.
@@ -258,14 +357,30 @@
           resetStatus.textContent = "Invalid admin password.";
           return;
         }
-        keepAdminPassword(stored);
-        resetStatus.textContent = "Reset completed.";
-        closeResetModal();
-        if (typeof window.navigateReload === "function") {
-          window.navigateReload();
+        if (!api || typeof api.reset_all_data !== "function") {
+          resetStatus.textContent = "Reset API not available. Restart the app.";
           return;
         }
-        window.location.reload();
+        resetStatus.textContent = "Resetting data...";
+        safeCall(() => api.reset_all_data(), "Failed to reset data.")
+          .then((result) => {
+            if (result && result.error) {
+              resetStatus.textContent = result.error;
+              return;
+            }
+            keepAdminPassword(stored);
+            resetStatus.textContent = "Reset completed.";
+            closeResetModal();
+            if (settingsStatus) settingsStatus.textContent = "All data reset.";
+            if (typeof window.navigateReload === "function") {
+              window.navigateReload();
+              return;
+            }
+            window.location.reload();
+          })
+          .catch((error) => {
+            resetStatus.textContent = error.message || "Failed to reset data.";
+          });
       }
 
       if (resetDataBtn) resetDataBtn.addEventListener("click", openResetModal);
@@ -284,17 +399,16 @@
         try {
           let admin = null;
           try {
-            const raw = localStorage.getItem("taha-admin");
+            const raw = localStorage.getItem(ADMIN_KEY);
             admin = raw ? JSON.parse(raw) : null;
           } catch (innerError) {
             admin = null;
           }
-          const adminPass = localStorage.getItem("taha-admin-password");
-          localStorage.clear();
+          const adminPass = localStorage.getItem(LEGACY_ADMIN_KEY);
           if (admin && admin.password) {
-            localStorage.setItem("taha-admin", JSON.stringify(admin));
+            localStorage.setItem(ADMIN_KEY, JSON.stringify(admin));
           } else if (adminPass) {
-            localStorage.setItem("taha-admin-password", adminPass);
+            localStorage.setItem(LEGACY_ADMIN_KEY, adminPass);
           }
         } catch (error) {
           // Ignore storage failures.

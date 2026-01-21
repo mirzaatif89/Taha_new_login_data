@@ -27,6 +27,53 @@ function navigateHistory(direction) {
   }, 320);
 }
 
+const PORTAL_KEY = "taha-portal";
+
+function normalizePortal(value) {
+  if (value === "canvas" || value === "connect") return value;
+  return "connect";
+}
+
+function getStoredPortal() {
+  try {
+    const raw = localStorage.getItem(PORTAL_KEY);
+    return raw ? normalizePortal(raw) : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function setStoredPortal(value) {
+  try {
+    localStorage.setItem(PORTAL_KEY, value);
+  } catch (error) {
+    // Ignore storage failures.
+  }
+}
+
+function applyPortalFromBody() {
+  const bodyPortalRaw = document.body.getAttribute("data-portal");
+  const bodyPortal = bodyPortalRaw ? normalizePortal(bodyPortalRaw) : "";
+  const stored = getStoredPortal();
+  const active = bodyPortal || stored || "connect";
+  if (bodyPortal && bodyPortal !== stored) {
+    setStoredPortal(bodyPortal);
+  } else if (!stored) {
+    setStoredPortal(active);
+  }
+  return active;
+}
+
+function bindPortalApi(portal) {
+  if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.set_portal === "function") {
+    window.pywebview.api.set_portal(portal);
+  }
+}
+
+const activePortal = applyPortalFromBody();
+bindPortalApi(activePortal);
+window.addEventListener("pywebviewready", () => bindPortalApi(activePortal));
+
 function shouldHandleLink(link) {
   if (!link || link.target === "_blank") return false;
   const href = link.getAttribute("href") || "";

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import shutil
+import sys
 import time
 from datetime import datetime
 import sqlite3
@@ -13,13 +14,32 @@ from typing import Iterable, List, Sequence
 import pandas as pd
 
 
-BASE_DIR = Path(__file__).resolve().parent
-REPORTS_DIR = BASE_DIR / "reports"
-DRIVER_DIR = BASE_DIR / "drivers"
+def _resource_base() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+
+def _app_data_base() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base) / "TAHA College Detail Bot"
+    return Path(__file__).resolve().parent
+
+
+RESOURCE_DIR = _resource_base()
+APP_DATA_DIR = _app_data_base()
+REPORTS_DIR = APP_DATA_DIR / "reports"
+DRIVER_DIR = RESOURCE_DIR / "drivers"
+USER_DRIVER_DIR = APP_DATA_DIR / "drivers"
 KEEP_BROWSER_OPEN = True
 ACTIVE_DRIVERS: list[dict] = []
-DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "taha_bot.db"
+DATA_DIR = APP_DATA_DIR / "data"
+TEMPLATES_DIR = APP_DATA_DIR / "templates"
+CURRENT_PORTAL = "connect"
+LEGACY_DB_PATH = DATA_DIR / "taha_bot.db"
+DB_PATH = DATA_DIR / "taha_bot_connect.db"
 ATTENDANCE_HEADERS = [
     "SNo.",
     "Client Email",
@@ -33,6 +53,89 @@ ATTENDANCE_HEADERS = [
     "Login Status",
     "Login Detail",
 ]
+
+
+def _normalize_portal(portal: str) -> str:
+    value = str(portal or "").strip().lower()
+    if value in {"canvas", "connect"}:
+        return value
+    return "connect"
+
+
+def set_active_portal(portal: str) -> str:
+    global CURRENT_PORTAL, DB_PATH
+    CURRENT_PORTAL = _normalize_portal(portal)
+    DB_PATH = DATA_DIR / f"taha_bot_{CURRENT_PORTAL}.db"
+    if CURRENT_PORTAL == "connect" and not DB_PATH.exists() and LEGACY_DB_PATH.exists():
+        try:
+            _ensure_parent(DB_PATH)
+            shutil.copy(LEGACY_DB_PATH, DB_PATH)
+        except Exception:
+            pass
+    return CURRENT_PORTAL
+
+
+def get_db_path() -> Path:
+    return DB_PATH
+
+
+def delete_storage_data(options: dict) -> dict:
+    _init_db()
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            if options.get("credentials"):
+                conn.execute("DELETE FROM credentials")
+            if options.get("login_status"):
+                conn.execute("DELETE FROM login_results WHERE mode = 'login'")
+            attendance_selected = options.get("attendance") or options.get("credit_hours")
+            if attendance_selected:
+                conn.execute("DELETE FROM login_results WHERE mode = 'attendance'")
+            if options.get("report_logs"):
+                conn.execute("DELETE FROM report_logs")
+            conn.commit()
+
+        if options.get("template_uploads"):
+            if TEMPLATES_DIR.is_dir():
+                for item in TEMPLATES_DIR.iterdir():
+                    if item.is_file() and item.name.lower() != "login_template.xlsx":
+                        try:
+                            item.unlink()
+                        except Exception:
+                            pass
+
+        return {"error": ""}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def reset_all_data() -> dict:
+    _init_db()
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("DELETE FROM credentials")
+            conn.execute("DELETE FROM login_results")
+            conn.execute("DELETE FROM report_logs")
+            conn.commit()
+
+        if REPORTS_DIR.is_dir():
+            for item in REPORTS_DIR.iterdir():
+                if item.is_file():
+                    try:
+                        item.unlink()
+                    except Exception:
+                        pass
+
+        if TEMPLATES_DIR.is_dir():
+            for item in TEMPLATES_DIR.iterdir():
+                if item.is_file() and item.name.lower() != "login_template.xlsx":
+                    try:
+                        item.unlink()
+                    except Exception:
+                        pass
+
+        return {"error": ""}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 def _ensure_parent(path: Path) -> None:
@@ -156,8 +259,7 @@ def download_template(
         if not target_path.suffix:
             target_path = target_path.with_suffix(".xlsx")
     else:
-        downloads_dir = BASE_DIR / "templates"
-        target_path = downloads_dir / default_filename
+        target_path = TEMPLATES_DIR / default_filename
     try:
         _ensure_parent(target_path)
         if template_source and template_source.is_file():
@@ -207,8 +309,9 @@ def load_credentials(file_path: Path, id_column: str, password_column: str):
 def _locate_local_driver():
     candidates = [
         os.environ.get("CHROMEDRIVER"),
+        USER_DRIVER_DIR / "chromedriver.exe",
         DRIVER_DIR / "chromedriver.exe",
-        BASE_DIR / "chromedriver.exe",
+        RESOURCE_DIR / "chromedriver.exe",
     ]
     for candidate in candidates:
         if not candidate:
@@ -238,7 +341,7 @@ def _locate_local_driver():
     return None
 
 
-def _build_driver(incognito: bool = False):
+def _build_driver(incognito: bool = False, headless: bool = False):
     try:
         from selenium import webdriver
         from selenium.common.exceptions import WebDriverException
@@ -248,11 +351,27 @@ def _build_driver(incognito: bool = False):
         raise RuntimeError("Selenium is required. Install via 'pip install selenium'.") from exc
 
     options = Options()
-    options.add_argument("--start-maximized")
+    if headless:
+        options.add_argument("--headless=new")
+        options.add_argument("--window-size=1280,900")
+    else:
+        options.add_argument("--start-maximized")
     options.add_argument("--disable-notifications")
+    options.add_argument("--disable-geolocation")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-extensions")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_argument("--use-fake-ui-for-media-stream")
+    options.add_argument("--use-fake-device-for-media-stream")
+    # Block pop-ups, notifications, and new window prompts.
+    prefs = {
+        "profile.default_content_setting_values.notifications": 2,
+        "profile.default_content_setting_values.popups": 2,
+        "profile.default_content_setting_values.geolocation": 2,
+        "profile.default_content_setting_values.media_stream_mic": 2,
+        "profile.default_content_setting_values.media_stream_camera": 2,
+    }
+    options.add_experimental_option("prefs", prefs)
     if incognito:
         options.add_argument("--incognito")
 
@@ -292,6 +411,7 @@ def run_login_batch(
     login_url: str,
     concurrency: int = 1,
     incognito: bool = False,
+    headless: bool = False,
     mode: str = "attendance",
     store_results: bool = True,
 ):
@@ -323,7 +443,7 @@ def run_login_batch(
         total_credentials = len(credentials)
         pool_size = max(1, min(concurrency or 1, total_credentials))
         for _ in range(pool_size):
-            browser = _build_driver(incognito=incognito)
+            browser = _build_driver(incognito=incognito, headless=headless)
             wait = WebDriverWait(browser, 20)
             browser.get(login_url)
             time.sleep(2)
@@ -458,6 +578,231 @@ def run_login_batch(
         "concurrency": concurrency,
         "browser_error": browser_error,
     }
+
+
+def click_continue_without_mic_camera(driver, timeout=20) -> bool:
+    """Iterate through iframes to press the 'Continue without' control (handles repeated prompts)."""
+    try:
+        from selenium.webdriver.common.by import By
+    except Exception:
+        return False
+    end_time = time.time() + timeout
+    selectors = [
+        ".pepc-permission-dialog__footer-button",
+        ".continue-without-mic-camera",
+        "[role='button']",
+        "button",
+        "span",
+    ]
+    js_click = """
+        const selectors = arguments[0];
+        for (const selector of selectors) {
+            const nodes = Array.from(document.querySelectorAll(selector)).filter(el =>
+                /Continue without microphone and camera/i.test((el.innerText || el.textContent || '').trim())
+            );
+            if (nodes.length) {
+                const target = nodes[0];
+                target.scrollIntoView({behavior:'smooth', block:'center'});
+                target.click();
+                return true;
+            }
+        }
+        return false;
+    """
+    clicked_once = False
+    while time.time() < end_time:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            return clicked_once
+        contexts = [None]
+        try:
+            contexts.extend(driver.find_elements(By.TAG_NAME, "iframe"))
+        except Exception:
+            pass
+        clicked_this_pass = False
+        for frame in contexts:
+            try:
+                driver.switch_to.default_content()
+                if frame is not None:
+                    driver.switch_to.frame(frame)
+                if driver.execute_script(js_click, selectors):
+                    clicked_once = True
+                    clicked_this_pass = True
+                    break
+            except Exception:
+                continue
+        if clicked_this_pass:
+            time.sleep(0.6)
+            continue
+        if clicked_once:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+            return True
+        time.sleep(0.5)
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    return clicked_once
+
+
+def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str):
+    """
+    Open the portal in Chrome, sign in with the first credential, and click the target card.
+    """
+    if not credentials:
+        raise RuntimeError("No Zoom credentials available.")
+
+    try:
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.support.ui import WebDriverWait
+    except ImportError as exc:  # pragma: no cover - surfaced to UI
+        raise RuntimeError("Selenium is required for Zoom portal automation.") from exc
+
+    _close_active_drivers()
+    driver = _build_driver(incognito=False, headless=False)
+    wait = WebDriverWait(driver, 25)
+    ACTIVE_DRIVERS.append({"driver": driver, "wait": wait})
+
+    driver.get(portal_url)
+    time.sleep(1.5)
+
+    def find_first(selectors):
+        for by, sel in selectors:
+            elements = driver.find_elements(by, sel)
+            if elements:
+                return elements[0]
+        return None
+
+    username_value = str(credentials[0].get("username") or credentials[0].get("id") or "").strip()
+    password_value = str(credentials[0].get("password") or "").strip()
+    if not username_value or not password_value:
+        raise RuntimeError("Excel file must include Username and Password columns.")
+
+    deadline = time.time() + 25
+    username_input = None
+    password_input = None
+    while time.time() < deadline and (not username_input or not password_input):
+        username_input = find_first(
+            [
+                (By.NAME, "username"),
+                (By.ID, "username"),
+                (By.CSS_SELECTOR, "input[type='email']"),
+                (By.CSS_SELECTOR, "input[type='text']"),
+            ]
+        )
+        password_input = find_first(
+            [
+                (By.NAME, "password"),
+                (By.ID, "password"),
+                (By.CSS_SELECTOR, "input[type='password']"),
+            ]
+        )
+        if username_input and password_input:
+            break
+        time.sleep(0.3)
+
+    if not username_input or not password_input:
+        raise RuntimeError("Login form not found on the portal.")
+
+    username_input.clear()
+    username_input.send_keys(username_value)
+    password_input.clear()
+    password_input.send_keys(password_value)
+    password_input.send_keys(Keys.TAB)
+    time.sleep(0.4)
+
+    sign_in = find_first(
+        [
+            (By.XPATH, "//button[normalize-space()='Sign In']"),
+            (By.XPATH, "//button[normalize-space()='Sign in']"),
+            (By.XPATH, "//button[normalize-space()='Signin']"),
+            (By.CSS_SELECTOR, "input[type='submit']"),
+        ]
+    )
+    if sign_in:
+        sign_in.click()
+
+    try:
+        target = wait.until(EC.element_to_be_clickable((By.XPATH, target_xpath)))
+        target.click()
+    except Exception as exc:
+        raise RuntimeError(f"Target card not found: {exc}") from exc
+
+    followup_xpath = "/html/body/div[1]/div[2]/div/div[2]/div/div[2]/h3[2]/span/a"
+    try:
+        original_window = driver.current_window_handle
+        handles_before = set(driver.window_handles)
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            handles_now = set(driver.window_handles)
+            new_handles = list(handles_now - handles_before)
+            if new_handles:
+                driver.switch_to.window(new_handles[0])
+                break
+            time.sleep(0.3)
+
+        # If the Zoom page opened in another existing tab, switch to it.
+        zoom_handle = None
+        for handle in driver.window_handles:
+            driver.switch_to.window(handle)
+            if "zoom.us" in (driver.current_url or ""):
+                zoom_handle = handle
+                break
+        if zoom_handle:
+            driver.switch_to.window(zoom_handle)
+
+        followup = None
+        try:
+            followup = wait.until(EC.element_to_be_clickable((By.XPATH, followup_xpath)))
+        except Exception:
+            pass
+        if followup:
+            followup.click()
+        else:
+            join_link = wait.until(
+                EC.element_to_be_clickable(
+                    (By.XPATH, "//a[contains(normalize-space(),'Join from your browser')]")
+                )
+            )
+            join_link.click()
+
+        # Dismiss Zoom media prompt if it appears (handles iframe prompts).
+        try:
+            click_continue_without_mic_camera(driver, timeout=20)
+        except Exception:
+            pass
+
+        try:
+            followup_button = wait.until(
+                EC.element_to_be_clickable(
+                    (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
+                )
+            )
+            followup_button.click()
+        except Exception:
+            pass
+
+        try:
+            join_button = wait.until(
+                EC.element_to_be_clickable(
+                    (
+                        By.XPATH,
+                        '/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button',
+                    )
+                )
+            )
+            join_button.click()
+        except Exception as e :
+            print(e)
+            pass
+    except Exception as exc:
+        raise RuntimeError(f"Follow-up target not found: {exc}") from exc
 
 
 def save_login_course_report(results: Iterable[dict]):

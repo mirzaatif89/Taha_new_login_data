@@ -17,10 +17,43 @@ const testingOnlyToggle = document.getElementById("testing-only-toggle");
 const testingSaveBtn = document.getElementById("testing-save-btn");
 const downloadBtn = document.getElementById("download-btn");
 const loginBtn = document.getElementById("login-btn");
+const zoomUploadBtn = document.getElementById("zoom-upload-btn");
+const zoomUploadStatus = document.getElementById("zoom-upload-status");
+const zoomJoinBtn = document.getElementById("zoom-join-btn");
 const threadInput = document.getElementById("thread-count");
 const incognitoToggle = document.getElementById("incognito-toggle");
+const headlessToggle = document.getElementById("headless-toggle");
 const loginStatusToggle = document.getElementById("log-login-status");
 const attendanceStatusToggle = document.getElementById("log-attendance-status");
+const portalCanvas = document.getElementById("portal-canvas");
+const portalConnect = document.getElementById("portal-connect");
+
+function getPortal() {
+  try {
+    return localStorage.getItem("taha-portal") || "connect";
+  } catch (error) {
+    return "connect";
+  }
+}
+
+function setPortal(value) {
+  try {
+    localStorage.setItem("taha-portal", value);
+  } catch (error) {
+    // Ignore storage failures.
+  }
+}
+
+const storedPortal = getPortal();
+if (portalCanvas && portalConnect) {
+  if (storedPortal === "canvas") {
+    portalCanvas.checked = true;
+    portalConnect.checked = false;
+  } else {
+    portalConnect.checked = true;
+    portalCanvas.checked = false;
+  }
+}
 const reportBtn = document.getElementById("report-btn");
 const reportCard = document.getElementById("report-card");
 const reportPreview = document.getElementById("report-preview");
@@ -37,6 +70,7 @@ const uploadModalMessage = document.getElementById("upload-modal-message");
 const uploadModalClose = document.getElementById("upload-modal-close");
 const uploadModalCta = document.getElementById("upload-modal-cta");
 let testingRows = [];
+let zoomFileSelected = false;
 
 function setStatus(el, message) {
   if (el) {
@@ -211,6 +245,7 @@ async function handleLogin() {
     const options = {
       threads: validateThreadCount(threadInput.value),
       incognito: !!incognitoToggle.checked,
+      headless: !!(headlessToggle && headlessToggle.checked),
       mode,
       source,
       testing: testingOnly,
@@ -250,6 +285,54 @@ async function handleLogin() {
 if (uploadBtn) uploadBtn.addEventListener("click", handleUpload);
 if (downloadBtn) downloadBtn.addEventListener("click", handleDownload);
 if (loginBtn) loginBtn.addEventListener("click", handleLogin);
+async function handleZoomUpload() {
+  if (!zoomUploadStatus) return;
+  zoomFileSelected = false;
+  setStatus(zoomUploadStatus, "Waiting for file selection...");
+  try {
+    if (!api || typeof api.select_zoom_file !== "function") {
+      setStatus(zoomUploadStatus, "Zoom upload API not available. Restart the app.");
+      return;
+    }
+    const result = await safeCall(() => api.select_zoom_file(), "Failed to select Zoom file.");
+    if (!result || !result.path) {
+      setStatus(zoomUploadStatus, "No file selected.");
+      return;
+    }
+    if (result.error) {
+      setStatus(zoomUploadStatus, result.error);
+      return;
+    }
+    zoomFileSelected = (result.total || 0) > 0;
+    const name = result.name || (result.path ? result.path.split(/[/\\]/).pop() : "");
+    setStatus(zoomUploadStatus, `Selected: ${name}`);
+  } catch (error) {
+    setStatus(zoomUploadStatus, error.message);
+  }
+}
+
+if (zoomUploadBtn) zoomUploadBtn.addEventListener("click", handleZoomUpload);
+
+if (zoomJoinBtn) {
+  zoomJoinBtn.addEventListener("click", async () => {
+    if (!zoomFileSelected) {
+      showUploadReminder("Upload your Zoom Excel file first.");
+      return;
+    }
+    try {
+      if (!api || typeof api.open_zoom_portal !== "function") {
+        showUploadReminder("Zoom portal API not available. Restart the app.");
+        return;
+      }
+      const result = await safeCall(() => api.open_zoom_portal(), "Failed to open Zoom portal.");
+      if (result && result.error) {
+        showUploadReminder(result.error);
+      }
+    } catch (error) {
+      showUploadReminder(error.message);
+    }
+  });
+}
 function goToReport() {
   if (typeof window.navigateTo === "function") {
     window.navigateTo("report.html");
@@ -278,6 +361,26 @@ if (refreshBtn) {
 if (settingsBtn) {
   settingsBtn.addEventListener("click", () => {
     window.location.href = "settings.html";
+  });
+}
+
+if (portalCanvas) {
+  portalCanvas.addEventListener("change", () => {
+    if (!portalCanvas.checked) return;
+    setPortal("canvas");
+    window.location.href = "canvas_portal.html";
+  });
+}
+
+if (portalConnect) {
+  portalConnect.addEventListener("change", () => {
+    if (!portalConnect.checked) return;
+    setPortal("connect");
+    if (typeof window.navigateReload === "function") {
+      window.navigateReload();
+      return;
+    }
+    window.location.reload();
   });
 }
 
