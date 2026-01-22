@@ -356,22 +356,24 @@ def _build_driver(incognito: bool = False, headless: bool = False):
         options.add_argument("--window-size=1280,900")
     else:
         options.add_argument("--start-maximized")
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-geolocation")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-site-isolation-trials")
+    options.add_argument("--autoplay-policy=no-user-gesture-required")
     options.add_argument("--disable-infobars")
-    options.add_argument("--disable-extensions")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_argument("--use-fake-ui-for-media-stream")
-    options.add_argument("--use-fake-device-for-media-stream")
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("prefs", {"download_restrictions": 3})  # block all downloads
+
     # Block pop-ups, notifications, and new window prompts.
-    prefs = {
-        "profile.default_content_setting_values.notifications": 2,
-        "profile.default_content_setting_values.popups": 2,
-        "profile.default_content_setting_values.geolocation": 2,
-        "profile.default_content_setting_values.media_stream_mic": 2,
-        "profile.default_content_setting_values.media_stream_camera": 2,
-    }
-    options.add_experimental_option("prefs", prefs)
+    # prefs = {
+    #     "profile.default_content_setting_values.notifications": 2,
+    #     "profile.default_content_setting_values.popups": 2,
+    #     "profile.default_content_setting_values.geolocation": 2,
+    #     "profile.default_content_setting_values.media_stream_mic": 2,
+    #     "profile.default_content_setting_values.media_stream_camera": 2,
+    # # }
+    # options.add_experimental_option("prefs", prefs)
     if incognito:
         options.add_argument("--incognito")
 
@@ -438,16 +440,22 @@ def run_login_batch(
     browser_error = ""
     drivers: list[dict] = []
 
+    # Helper to (re)build a fresh driver. Recreated when Selenium reports
+    # "invalid session id", which usually means Chrome closed or the session
+    # crashed between iterations.
+    def _new_driver():
+        browser = _build_driver(incognito=incognito, headless=headless)
+        wait_obj = WebDriverWait(browser, 20)
+        browser.get(login_url)
+        time.sleep(2)
+        return {"driver": browser, "wait": wait_obj}
+
     try:
         _close_active_drivers()
         total_credentials = len(credentials)
         pool_size = max(1, min(concurrency or 1, total_credentials))
         for _ in range(pool_size):
-            browser = _build_driver(incognito=incognito, headless=headless)
-            wait = WebDriverWait(browser, 20)
-            browser.get(login_url)
-            time.sleep(2)
-            drivers.append({"driver": browser, "wait": wait})
+            drivers.append(_new_driver())
         ACTIVE_DRIVERS = drivers
 
         if not drivers:
@@ -472,94 +480,118 @@ def run_login_batch(
                 )
                 continue
 
-            try:
-                username_input = wait.until(EC.presence_of_element_located(username_selector))
-                password_input = wait.until(EC.presence_of_element_located(password_selector))
-                submit_btn = wait.until(EC.element_to_be_clickable(submit_selector))
+            attempt = 0
+            while attempt < 2:
+                attempt += 1
+                try:
+                    username_input = wait.until(EC.presence_of_element_located(username_selector))
+                    password_input = wait.until(EC.presence_of_element_located(password_selector))
+                    submit_btn = wait.until(EC.element_to_be_clickable(submit_selector))
 
-                username_input.clear()
-                username_input.send_keys(username_value)
-                password_input.clear()
-                password_input.send_keys(password_value)
-                password_input.send_keys(Keys.TAB)
-                time.sleep(0.5)
+                    username_input.clear()
+                    username_input.send_keys(username_value)
+                    password_input.clear()
+                    password_input.send_keys(password_value)
+                    password_input.send_keys(Keys.TAB)
+                    time.sleep(0.5)
 
-                submit_btn.click()
-                time.sleep(2.5)
+                    submit_btn.click()
+                    time.sleep(2.5)
 
-                login_status = "Success"
-                login_detail = "Credentials submitted to TAHA portal."
+                    login_status = "Success"
+                    login_detail = "Credentials submitted to TAHA portal."
 
-                for selector in [
-                    "//*[contains(@class,'alert') and contains(@class,'alert-danger')]",
-                    "//*[contains(@class,'alert') and contains(@class,'alert-error')]",
-                    "//div[@role='alert']",
-                    "//span[contains(@class,'error')]",
-                ]:
-                    try:
-                        alert_element = browser.find_element(By.XPATH, selector)
-                        alert_text = alert_element.text.strip()
-                        if alert_text:
-                            login_status = "Failed"
-                            login_detail = alert_text
-                            break
-                    except Exception:
-                        continue
+                    for selector in [
+                        "//*[contains(@class,'alert') and contains(@class,'alert-danger')]",
+                        "//*[contains(@class,'alert') and contains(@class,'alert-error')]",
+                        "//div[@role='alert']",
+                        "//span[contains(@class,'error')]",
+                    ]:
+                        try:
+                            alert_element = browser.find_element(By.XPATH, selector)
+                            alert_text = alert_element.text.strip()
+                            if alert_text:
+                                login_status = "Failed"
+                                login_detail = alert_text
+                                break
+                        except Exception:
+                            continue
 
-                timestamp = datetime.now()
-                attendance_data: dict[str, str] = {}
+                    timestamp = datetime.now()
+                    attendance_data: dict[str, str] = {}
 
-                if capture_attendance and login_status == "Success":
-                    try:
-                        attendance_link = wait.until(EC.element_to_be_clickable(attendance_selector))
-                        attendance_link.click()
-                        time.sleep(1.2)
-                        row_element = wait.until(EC.presence_of_element_located(attendance_row_selector))
-                        cells = row_element.find_elements(By.TAG_NAME, "td")
-                        if not cells:
-                            cells = row_element.find_elements(By.XPATH, "./*")
+                    if capture_attendance and login_status == "Success":
+                        try:
+                            attendance_link = wait.until(EC.element_to_be_clickable(attendance_selector))
+                            attendance_link.click()
+                            time.sleep(1.2)
+                            row_element = wait.until(EC.presence_of_element_located(attendance_row_selector))
+                            cells = row_element.find_elements(By.TAG_NAME, "td")
+                            if not cells:
+                                cells = row_element.find_elements(By.XPATH, "./*")
 
-                        def cell_text(idx: int) -> str:
-                            if idx < len(cells):
-                                return cells[idx].text.strip()
-                            return ""
+                            def cell_text(idx: int) -> str:
+                                if idx < len(cells):
+                                    return cells[idx].text.strip()
+                                return ""
 
-                        attendance_data = {
-                            "month": cell_text(1),
-                            "day": cell_text(2),
-                            "signin": cell_text(3),
-                            "signout": cell_text(4),
-                            "total_time": cell_text(5),
-                            "status": cell_text(6),
-                            "action": cell_text(7),
+                            attendance_data = {
+                                "month": cell_text(1),
+                                "day": cell_text(2),
+                                "signin": cell_text(3),
+                                "signout": cell_text(4),
+                                "total_time": cell_text(5),
+                                "status": cell_text(6),
+                                "action": cell_text(7),
+                            }
+                        except Exception as exc:
+                            browser_error = f"Attendance capture failed: {exc}"
+
+                    results.append(
+                        {
+                            "id": username_value,
+                            "status": login_status,
+                            "message": login_detail,
+                            "email": username_value,
+                            "timestamp": timestamp,
+                            "attendance": attendance_data if capture_attendance else {},
                         }
-                    except Exception as exc:
-                        browser_error = f"Attendance capture failed: {exc}"
-
-                results.append(
-                    {
-                        "id": username_value,
-                        "status": login_status,
-                        "message": login_detail,
-                        "email": username_value,
-                        "timestamp": timestamp,
-                        "attendance": attendance_data if capture_attendance else {},
-                    }
-                )
-            except Exception as exc:  # pragma: no cover - automation issues
-                browser_error = str(exc)
-                results.append(
-                    {
-                        "id": username_value or f"Row {index}",
-                        "status": "Error",
-                        "message": f"Automation failed: {exc}",
-                        "email": username_value,
-                    }
-                )
+                    )
+                    break
+                except Exception as exc:  # pragma: no cover - automation issues
+                    msg = str(exc)
+                    if "invalid session id" in msg.lower() and attempt == 1:
+                        try:
+                            if ctx.get("driver"):
+                                try:
+                                    ctx["driver"].quit()
+                                except Exception:
+                                    pass
+                        finally:
+                            drivers[driver_idx] = ctx = _new_driver()
+                            browser = ctx["driver"]
+                            wait = ctx["wait"] # retry this credential once with fresh session
+                    browser_error = msg
+                    results.append(
+                        {
+                            "id": username_value or f"Row {index}",
+                            "status": "Error",
+                            "message": f"Automation failed: {msg}",
+                            "email": username_value,
+                        }
+                    )
+                    break
 
             if index + len(drivers) <= total_credentials:
-                browser.get(login_url)
-                time.sleep(1.5)
+                try:
+                    browser.get(login_url)
+                    time.sleep(1.5)
+                except Exception as exc:
+                    if "invalid session id" in str(exc).lower():
+                        drivers[driver_idx] = ctx = _new_driver()
+                        browser = ctx["driver"]
+                        wait = ctx["wait"]
+                        time.sleep(1.0)
     except Exception as exc:
         browser_error = str(exc)
     finally:
@@ -578,14 +610,9 @@ def run_login_batch(
         "concurrency": concurrency,
         "browser_error": browser_error,
     }
-
-
+import time
 def click_continue_without_mic_camera(driver, timeout=20) -> bool:
     """Iterate through iframes to press the 'Continue without' control (handles repeated prompts)."""
-    try:
-        from selenium.webdriver.common.by import By
-    except Exception:
-        return False
     end_time = time.time() + timeout
     selectors = [
         ".pepc-permission-dialog__footer-button",
@@ -629,7 +656,7 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
                 if driver.execute_script(js_click, selectors):
                     clicked_once = True
                     clicked_this_pass = True
-                    break
+                    break  # re-evaluate: prompt might reappear in same or another context
             except Exception:
                 continue
         if clicked_this_pass:
@@ -648,6 +675,58 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
         pass
     return clicked_once
 
+from selenium.webdriver.common.by import By
+
+def find_name_input(driver, timeout=20):
+    """Locate the meeting name input regardless of iframe nesting."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException
+
+    end_time = time.time() + timeout
+    selectors = [
+        (By.CSS_SELECTOR, "input[name='name']"),
+        (By.CSS_SELECTOR, "input#name"),
+        (By.CSS_SELECTOR, "input#inputname"),
+        (By.CSS_SELECTOR, "input.zm-input__input"),
+        (By.XPATH, "//input[contains(@placeholder, 'Name')]"),
+        (By.XPATH, "//input[contains(@aria-label, 'name')]"),
+        (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/div[2]/div/input"),
+    ]
+    last_error = None
+    while time.time() < end_time:
+        try:
+            driver.switch_to.default_content()
+        except Exception as exc:
+            last_error = exc
+            break
+        contexts = [None]
+        try:
+            contexts.extend(driver.find_elements(By.TAG_NAME, "iframe"))
+        except Exception:
+            pass
+        for frame in contexts:
+            try:
+                driver.switch_to.default_content()
+                if frame is not None:
+                    driver.switch_to.frame(frame)
+                for by, value in selectors:
+                    try:
+                        return WebDriverWait(driver, 3).until(EC.element_to_be_clickable((by, value)))
+                    except TimeoutException:
+                        continue
+            except Exception as exc:
+                last_error = exc
+                continue
+        time.sleep(0.5)
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    if last_error:
+        raise TimeoutException(f"Name input not found: {last_error}")
+    raise TimeoutException("Name input not found")
 
 def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str):
     """
@@ -657,6 +736,7 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str)
         raise RuntimeError("No Zoom credentials available.")
 
     try:
+        import time
         from selenium.webdriver.common.by import By
         from selenium.webdriver.common.keys import Keys
         from selenium.webdriver.support import expected_conditions as EC
@@ -789,15 +869,14 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str)
             pass
 
         try:
-            join_button = wait.until(
-                EC.element_to_be_clickable(
-                    (
-                        By.XPATH,
-                        '/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button',
-                    )
-                )
-            )
-            join_button.click()
+            name_input = find_name_input(driver, timeout=10)
+            try:
+                name_input.clear()
+            except Exception:
+                pass
+            # name_input.send_keys(name)
+            name_input.send_keys(Keys.RETURN)
+            time.sleep(2)
         except Exception as e :
             print(e)
             pass
