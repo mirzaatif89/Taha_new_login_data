@@ -20,6 +20,7 @@ const loginBtn = document.getElementById("login-btn");
 const zoomUploadBtn = document.getElementById("zoom-upload-btn");
 const zoomUploadStatus = document.getElementById("zoom-upload-status");
 const zoomJoinBtn = document.getElementById("zoom-join-btn");
+const zoomThreadInput = document.getElementById("zoom-thread-count");
 const threadInput = document.getElementById("thread-count");
 const incognitoToggle = document.getElementById("incognito-toggle");
 const headlessToggle = document.getElementById("headless-toggle");
@@ -324,7 +325,13 @@ if (zoomJoinBtn) {
         showUploadReminder("Zoom portal API not available. Restart the app.");
         return;
       }
-      const result = await safeCall(() => api.open_zoom_portal(), "Failed to open Zoom portal.");
+      const result = await safeCall(
+        () =>
+          api.open_zoom_portal({
+            threads: validateThreadCount(zoomThreadInput ? zoomThreadInput.value : 1),
+          }),
+        "Failed to open Zoom portal."
+      );
       if (result && result.error) {
         showUploadReminder(result.error);
       }

@@ -728,9 +728,10 @@ def find_name_input(driver, timeout=20):
         raise TimeoutException(f"Name input not found: {last_error}")
     raise TimeoutException("Name input not found")
 
-def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str):
+def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str, threads: int = 1):
     """
-    Open the portal in Chrome, sign in with the first credential, and click the target card.
+    Open the portal in Chrome, sign in with one or more credentials, and click the target card.
+    The number of browser instances is limited by `threads` and the credential count.
     """
     if not credentials:
         raise RuntimeError("No Zoom credentials available.")
@@ -744,144 +745,159 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str)
     except ImportError as exc:  # pragma: no cover - surfaced to UI
         raise RuntimeError("Selenium is required for Zoom portal automation.") from exc
 
+    threads = max(1, int(threads or 1))
+    threads = min(threads, len(credentials))
+
     _close_active_drivers()
-    driver = _build_driver(incognito=False, headless=False)
-    wait = WebDriverWait(driver, 25)
-    ACTIVE_DRIVERS.append({"driver": driver, "wait": wait})
+    errors: list[str] = []
+    for idx in range(threads):
+        cred = credentials[idx]
+        driver = _build_driver(incognito=False, headless=False)
+        wait = WebDriverWait(driver, 25)
+        ACTIVE_DRIVERS.append({"driver": driver, "wait": wait})
 
-    driver.get(portal_url)
-    time.sleep(1.5)
+        driver.get(portal_url)
+        time.sleep(1.5)
 
-    def find_first(selectors):
-        for by, sel in selectors:
-            elements = driver.find_elements(by, sel)
-            if elements:
-                return elements[0]
-        return None
+        def find_first(selectors):
+            for by, sel in selectors:
+                elements = driver.find_elements(by, sel)
+                if elements:
+                    return elements[0]
+            return None
 
-    username_value = str(credentials[0].get("username") or credentials[0].get("id") or "").strip()
-    password_value = str(credentials[0].get("password") or "").strip()
-    if not username_value or not password_value:
-        raise RuntimeError("Excel file must include Username and Password columns.")
+        username_value = str(cred.get("username") or cred.get("id") or "").strip()
+        password_value = str(cred.get("password") or "").strip()
+        display_name = username_value or "Student"
+        if not username_value or not password_value:
+            errors.append("Excel file must include Username and Password columns.")
+            continue
 
-    deadline = time.time() + 25
-    username_input = None
-    password_input = None
-    while time.time() < deadline and (not username_input or not password_input):
-        username_input = find_first(
-            [
-                (By.NAME, "username"),
-                (By.ID, "username"),
-                (By.CSS_SELECTOR, "input[type='email']"),
-                (By.CSS_SELECTOR, "input[type='text']"),
-            ]
-        )
-        password_input = find_first(
-            [
-                (By.NAME, "password"),
-                (By.ID, "password"),
-                (By.CSS_SELECTOR, "input[type='password']"),
-            ]
-        )
-        if username_input and password_input:
-            break
-        time.sleep(0.3)
-
-    if not username_input or not password_input:
-        raise RuntimeError("Login form not found on the portal.")
-
-    username_input.clear()
-    username_input.send_keys(username_value)
-    password_input.clear()
-    password_input.send_keys(password_value)
-    password_input.send_keys(Keys.TAB)
-    time.sleep(0.4)
-
-    sign_in = find_first(
-        [
-            (By.XPATH, "//button[normalize-space()='Sign In']"),
-            (By.XPATH, "//button[normalize-space()='Sign in']"),
-            (By.XPATH, "//button[normalize-space()='Signin']"),
-            (By.CSS_SELECTOR, "input[type='submit']"),
-        ]
-    )
-    if sign_in:
-        sign_in.click()
-
-    try:
-        target = wait.until(EC.element_to_be_clickable((By.XPATH, target_xpath)))
-        target.click()
-    except Exception as exc:
-        raise RuntimeError(f"Target card not found: {exc}") from exc
-
-    followup_xpath = "/html/body/div[1]/div[2]/div/div[2]/div/div[2]/h3[2]/span/a"
-    try:
-        original_window = driver.current_window_handle
-        handles_before = set(driver.window_handles)
-        deadline = time.time() + 15
-        while time.time() < deadline:
-            handles_now = set(driver.window_handles)
-            new_handles = list(handles_now - handles_before)
-            if new_handles:
-                driver.switch_to.window(new_handles[0])
+        deadline = time.time() + 25
+        username_input = None
+        password_input = None
+        while time.time() < deadline and (not username_input or not password_input):
+            username_input = find_first(
+                [
+                    (By.NAME, "username"),
+                    (By.ID, "username"),
+                    (By.CSS_SELECTOR, "input[type='email']"),
+                    (By.CSS_SELECTOR, "input[type='text']"),
+                ]
+            )
+            password_input = find_first(
+                [
+                    (By.NAME, "password"),
+                    (By.ID, "password"),
+                    (By.CSS_SELECTOR, "input[type='password']"),
+                ]
+            )
+            if username_input and password_input:
                 break
             time.sleep(0.3)
 
-        # If the Zoom page opened in another existing tab, switch to it.
-        zoom_handle = None
-        for handle in driver.window_handles:
-            driver.switch_to.window(handle)
-            if "zoom.us" in (driver.current_url or ""):
-                zoom_handle = handle
-                break
-        if zoom_handle:
-            driver.switch_to.window(zoom_handle)
+        if not username_input or not password_input:
+            errors.append("Login form not found on the portal.")
+            continue
 
-        followup = None
-        try:
-            followup = wait.until(EC.element_to_be_clickable((By.XPATH, followup_xpath)))
-        except Exception:
-            pass
-        if followup:
-            followup.click()
-        else:
-            join_link = wait.until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "//a[contains(normalize-space(),'Join from your browser')]")
-                )
-            )
-            join_link.click()
+        username_input.clear()
+        username_input.send_keys(username_value)
+        password_input.clear()
+        password_input.send_keys(password_value)
+        password_input.send_keys(Keys.TAB)
+        time.sleep(0.4)
 
-        # Dismiss Zoom media prompt if it appears (handles iframe prompts).
-        try:
-            click_continue_without_mic_camera(driver, timeout=20)
-        except Exception:
-            pass
+        sign_in = find_first(
+            [
+                (By.XPATH, "//button[normalize-space()='Sign In']"),
+                (By.XPATH, "//button[normalize-space()='Sign in']"),
+                (By.XPATH, "//button[normalize-space()='Signin']"),
+                (By.CSS_SELECTOR, "input[type='submit']"),
+            ]
+        )
+        if sign_in:
+            sign_in.click()
 
         try:
-            followup_button = wait.until(
-                EC.element_to_be_clickable(
-                    (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
-                )
-            )
-            followup_button.click()
-        except Exception:
-            pass
+            target = wait.until(EC.element_to_be_clickable((By.XPATH, target_xpath)))
+            target.click()
+        except Exception as exc:
+            errors.append(f"Target card not found: {exc}")
+            continue
 
+        followup_xpath = "/html/body/div[1]/div[2]/div/div[2]/div/div[2]/h3[2]/span/a"
         try:
-            name_input = find_name_input(driver, timeout=10)
+            handles_before = set(driver.window_handles)
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                handles_now = set(driver.window_handles)
+                new_handles = list(handles_now - handles_before)
+                if new_handles:
+                    driver.switch_to.window(new_handles[0])
+                    break
+                time.sleep(0.3)
+
+            # If the Zoom page opened in another existing tab, switch to it.
+            zoom_handle = None
+            for handle in driver.window_handles:
+                driver.switch_to.window(handle)
+                if "zoom.us" in (driver.current_url or ""):
+                    zoom_handle = handle
+                    break
+            if zoom_handle:
+                driver.switch_to.window(zoom_handle)
+
+            followup = None
             try:
-                name_input.clear()
+                followup = wait.until(EC.element_to_be_clickable((By.XPATH, followup_xpath)))
             except Exception:
                 pass
-            # name_input.send_keys(name)
-            name_input.send_keys(Keys.RETURN)
-            time.sleep(2)
-        except Exception as e :
-            print(e)
-            pass
-    except Exception as exc:
-        raise RuntimeError(f"Follow-up target not found: {exc}") from exc
+            if followup:
+                followup.click()
+            else:
+                join_link = wait.until(
+                    EC.element_to_be_clickable(
+                        (By.XPATH, "//a[contains(normalize-space(),'Join from your browser')]")
+                    )
+                )
+                join_link.click()
+
+            # Dismiss Zoom media prompt if it appears (handles iframe prompts).
+            try:
+                click_continue_without_mic_camera(driver, timeout=20)
+            except Exception:
+                pass
+
+            try:
+                followup_button = wait.until(
+                    EC.element_to_be_clickable(
+                        (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
+                    )
+                )
+                followup_button.click()
+            except Exception:
+                pass
+
+            try:
+                name_input = find_name_input(driver, timeout=10)
+                try:
+                    name_input.clear()
+                except Exception:
+                    pass
+                try:
+                    name_input.send_keys(display_name)
+                except Exception:
+                    pass
+                name_input.send_keys(Keys.RETURN)
+                time.sleep(2)
+            except Exception as e :
+                print(e)
+                pass
+        except Exception as exc:
+            errors.append(f"Follow-up target not found: {exc}")
+            continue
+    if errors:
+        raise RuntimeError("; ".join(errors))
 
 
 def save_login_course_report(results: Iterable[dict]):

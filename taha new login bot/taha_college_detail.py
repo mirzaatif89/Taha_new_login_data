@@ -131,7 +131,7 @@ class Api:
             "error": "",
         }
 
-    def open_zoom_portal(self):
+    def open_zoom_portal(self, options=None):
         if not self.zoom_credentials:
             return {"error": "Upload your Zoom Excel file first."}
 
@@ -141,12 +141,20 @@ class Api:
         if not username or not password:
             return {"error": "Excel file must include Username and Password columns."}
 
+        options = options or {}
+        try:
+            threads = int(options.get("threads", 1))
+        except Exception:
+            threads = 1
+        threads = max(1, min(threads, 10))
+
         def _open_and_fill():
             try:
                 run_zoom_portal(
                     self.zoom_credentials,
                     portal_url=ZOOM_PORTAL_URL,
                     target_xpath="/html/body/section[3]/div/div/div[1]/div/div[1]/div/div",
+                    threads=threads,
                 )
             except Exception:
                 pass
