@@ -334,7 +334,7 @@ if (zoomJoinBtn) {
         return;
       }
       const result = await safeCall(
-        () => api.open_zoom_portal({ threads: 1 }),
+        () => api.open_zoom_portal({ threads: validateZoomThreadCount(zoomThreadInput && zoomThreadInput.value) }),
         "Failed to open Zoom portal."
       );
       if (result && result.error) {
