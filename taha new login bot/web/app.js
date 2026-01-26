@@ -213,6 +213,12 @@ function validateZoomThreadCount(value) {
   return parsed;
 }
 
+function normalizeProxyScheme(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (["http", "https", "socks5", "socks4"].includes(v)) return v;
+  return "";
+}
+
 async function handleLogin() {
   const source = uploadByStored && uploadByStored.checked ? "stored" : "file";
   const testingOnly = !!(testingOnlyToggle && testingOnlyToggle.checked);
@@ -322,15 +328,34 @@ async function handleZoomUpload() {
 
 if (zoomUploadBtn) zoomUploadBtn.addEventListener("click", handleZoomUpload);
 
+let zoomJoining = false;
+
+function setZoomJoinDisabled(disabled, label) {
+  if (!zoomJoinBtn) return;
+  zoomJoinBtn.disabled = !!disabled;
+  if (label) {
+    zoomJoinBtn.dataset.originalText = zoomJoinBtn.dataset.originalText || zoomJoinBtn.textContent;
+    zoomJoinBtn.textContent = label;
+  } else if (zoomJoinBtn.dataset.originalText) {
+    zoomJoinBtn.textContent = zoomJoinBtn.dataset.originalText;
+  }
+}
+
 if (zoomJoinBtn) {
   zoomJoinBtn.addEventListener("click", async () => {
+    if (zoomJoining) return;
     if (!zoomFileSelected) {
       showUploadReminder("Upload your Zoom Excel file first.");
       return;
     }
+    zoomJoining = true;
+    setZoomJoinDisabled(true, "Starting...");
+    setStatus(zoomUploadStatus, "Opening Zoom classes...");
     try {
       if (!api || typeof api.open_zoom_portal !== "function") {
         showUploadReminder("Zoom portal API not available. Restart the app.");
+        zoomJoining = false;
+        setZoomJoinDisabled(false);
         return;
       }
       const result = await safeCall(
@@ -339,9 +364,16 @@ if (zoomJoinBtn) {
       );
       if (result && result.error) {
         showUploadReminder(result.error);
+        zoomJoining = false;
+        setZoomJoinDisabled(false);
+      } else {
+        setStatus(zoomUploadStatus, "Zoom classes launching... browsers may take a few seconds.");
+        // keep disabled until logout to avoid double-launch
       }
     } catch (error) {
       showUploadReminder(error.message);
+      zoomJoining = false;
+      setZoomJoinDisabled(false);
     }
   });
 }
@@ -356,6 +388,8 @@ if (zoomLogoutBtn) {
       const result = await safeCall(() => api.logout_zoom_sessions(), "Failed to logout sessions.");
       const closed = result && typeof result.closed === "number" ? result.closed : 0;
       setStatus(zoomUploadStatus, `Closed ${closed} browser(s).`);
+      zoomJoining = false;
+      setZoomJoinDisabled(false);
     } catch (error) {
       showUploadReminder(error.message);
     }

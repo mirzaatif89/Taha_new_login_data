@@ -11,7 +11,9 @@ from datetime import datetime
 import sqlite3
 from pathlib import Path
 from time import perf_counter
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Sequence, Tuple, Optional
+from contextlib import suppress
+import json
 
 import pandas as pd
 
@@ -194,6 +196,15 @@ def _init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT
+            )
+            """
+        )
         _ensure_columns(
             conn,
             "login_results",
@@ -236,7 +247,53 @@ def _init_db():
                 ("created_at", "TEXT"),
             ],
         )
+        _ensure_columns(
+            conn,
+            "settings",
+            [
+                ("key", "TEXT"),
+                ("value", "TEXT"),
+                ("updated_at", "TEXT"),
+            ],
+        )
         conn.commit()
+
+
+def set_setting(key: str, value: str):
+    _init_db()
+    key = (key or "").strip()
+    if not key:
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, value or "", datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+
+
+def get_setting(key: str) -> str:
+    _init_db()
+    key = (key or "").strip()
+    if not key:
+        return ""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else ""
+
+
+def get_proxy_auth() -> Tuple[str, str]:
+    return get_setting("proxy_username"), get_setting("proxy_password")
+
+
+def set_proxy_auth(username: str, password: str):
+    set_setting("proxy_username", username or "")
+    set_setting("proxy_password", password or "")
 
 
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: list[tuple[str, str]]) -> None:
@@ -266,14 +323,39 @@ def download_template(
         target_path = TEMPLATES_DIR / default_filename
     try:
         _ensure_parent(target_path)
-        if template_source and template_source.is_file():
-            shutil.copy(template_source, target_path)
-        else:
-            df = pd.DataFrame(columns=list(columns or ["Username", "Password"]))
-            df.to_excel(target_path, index=False)
+        desired_cols = list(columns or ["Username", "Password"])
+        # Always generate a fresh template with the requested columns so users see expected headers.
+        df = pd.DataFrame(columns=desired_cols)
+        df.to_excel(target_path, index=False)
         return {"saved": True, "path": str(target_path), "error": ""}
     except Exception as exc:  # pragma: no cover - surfaced via UI
         return {"saved": False, "path": "", "error": str(exc)}
+
+
+def _probe_proxy_http(url: str, proxy: str, scheme: str, user: str = "", password: str = "", timeout: int = 8) -> tuple[bool, str]:
+    """
+    Lightweight reachability check using requests through the provided proxy.
+    Only supports http/https proxies (not SOCKS) to avoid extra deps.
+    """
+    try:
+        import requests  # type: ignore
+    except Exception:
+        return False, "Python 'requests' not available to test proxy."
+
+    proxy_url = proxy
+    if proxy_url and not proxy_url.startswith(("http://", "https://")):
+        proxy_url = f"http://{proxy_url}"
+    if user and proxy_url:
+        proto, rest = proxy_url.split("://", 1)
+        proxy_url = f"{proto}://{user}:{password or ''}@{rest}"
+    proxies = {"http": proxy_url, "https": proxy_url}
+    try:
+        resp = requests.get(url, proxies=proxies, timeout=timeout, allow_redirects=True)
+        if resp.status_code >= 400:
+            return False, f"Proxy test HTTP {resp.status_code}"
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
 
 
 def load_credentials(file_path: Path, id_column: str, password_column: str):
@@ -297,6 +379,11 @@ def load_credentials(file_path: Path, id_column: str, password_column: str):
     columns = {normalize(col): col for col in df.columns}
     id_key = columns.get(normalize(id_column))
     password_key = columns.get(normalize(password_column))
+    proxy_key = columns.get("proxy")
+    port_key = columns.get("port")
+    proxy_scheme_key = columns.get("proxy scheme") or columns.get("proxy type")
+    proxy_user_key = columns.get("proxy username") or columns.get("proxy_user") or columns.get("proxyusername")
+    proxy_pass_key = columns.get("proxy password") or columns.get("proxy_pass") or columns.get("proxypassword")
     if not id_key or not password_key:
         raise ValueError(f"Columns '{id_column}' and '{password_column}' are required.")
 
@@ -304,9 +391,39 @@ def load_credentials(file_path: Path, id_column: str, password_column: str):
     for _, row in df.iterrows():
         identifier = str(row.get(id_key, "")).strip()
         password = str(row.get(password_key, "")).strip()
+        proxy = str(row.get(proxy_key, "")).strip() if proxy_key else ""
+        port = str(row.get(port_key, "")).strip() if port_key else ""
+        proxy_user = str(row.get(proxy_user_key, "")).strip() if proxy_user_key else ""
+        proxy_pass = str(row.get(proxy_pass_key, "")).strip() if proxy_pass_key else ""
+        proxy_scheme = str(row.get(proxy_scheme_key, "")).strip().lower() if proxy_scheme_key else ""
         if not identifier:
             continue
-        records.append({"id": identifier, "username": identifier, "password": password})
+        proxy_addr = ""
+        if proxy and port:
+            proxy_addr = f"{proxy}:{port}"
+        elif proxy:
+            proxy_addr = proxy
+        # If scheme not provided, guess: socks if string contains 'socks', else http when auth is present
+        if not proxy_scheme:
+            raw_lower = proxy_addr.lower()
+            if "socks5" in raw_lower:
+                proxy_scheme = "socks5"
+            elif "socks4" in raw_lower:
+                proxy_scheme = "socks4"
+            elif proxy_user and proxy_addr:
+                proxy_scheme = "http"
+
+        records.append(
+            {
+                "id": identifier,
+                "username": identifier,
+                "password": password,
+                "proxy": proxy_addr,
+                "proxy_scheme": proxy_scheme,
+                "proxy_username": proxy_user,
+                "proxy_password": proxy_pass,
+            }
+        )
     return records
 
 
@@ -345,7 +462,13 @@ def _locate_local_driver():
     return None
 
 
-def _build_driver(incognito: bool = False, headless: bool = False):
+def _build_driver(
+    incognito: bool = False,
+    headless: bool = False,
+    proxy: Optional[str] = None,
+    proxy_auth: Optional[Tuple[str, str]] = None,
+    proxy_scheme: Optional[str] = None,
+):
     try:
         from selenium import webdriver
         from selenium.common.exceptions import WebDriverException
@@ -353,6 +476,20 @@ def _build_driver(incognito: bool = False, headless: bool = False):
         from selenium.webdriver.chrome.service import Service
     except ImportError as exc:  # pragma: no cover - surfaced to UI
         raise RuntimeError("Selenium is required. Install via 'pip install selenium'.") from exc
+
+    wire_webdriver = None
+    auth_requested = bool(proxy and proxy_auth and proxy_auth[0])
+    if auth_requested:
+        try:
+            from seleniumwire import webdriver as wire_webdriver  # type: ignore
+        except Exception:
+            wire_webdriver = None
+        # For SOCKS proxies we really need selenium-wire; for HTTP we can still try user:pass in flag.
+        if wire_webdriver is None and str(proxy_scheme or "").lower().startswith("socks"):
+            raise RuntimeError(
+                "SOCKS proxy authentication needs selenium-wire. Install it with "
+                "'pip install -r Taha_new_login_data/requirements.txt' and try again."
+            )
 
     options = Options()
     viewport = f"--window-size={DEFAULT_WINDOW_SIZE[0]},{DEFAULT_WINDOW_SIZE[1]}"
@@ -379,30 +516,77 @@ def _build_driver(incognito: bool = False, headless: bool = False):
     options.add_experimental_option("prefs", prefs)
     if incognito:
         options.add_argument("--incognito")
+    # Build normalized proxy urls/flags
+    proxy_flag = proxy
+    scheme_pref = (proxy_scheme or "").lower().strip()
+    def with_scheme(val: str, scheme_hint: str) -> str:
+        if val.startswith(("http://", "https://", "socks5://", "socks4://")):
+            return val
+        if scheme_hint:
+            return f"{scheme_hint}://{val}"
+        if val.endswith((":1080", ":1086")):
+            return f"socks5://{val}"
+        return f"http://{val}"
 
-    local_driver = _locate_local_driver()
-    if local_driver:
-        try:
-            browser = webdriver.Chrome(service=Service(executable_path=str(local_driver)), options=options)
-        except WebDriverException as nested_exc:
-            raise RuntimeError(
-                "ChromeDriver was found locally but could not be started. "
-                f"Original error: {nested_exc}"
-            ) from nested_exc
-        _apply_window_bounds(browser)
-        return browser
+    use_wire = auth_requested and wire_webdriver is not None
+
+    if proxy and not use_wire:
+        proxy_flag = with_scheme(proxy, scheme_pref)
+        # For SOCKS proxies, Chrome does not support creds in the flag. Leave auth to selenium-wire only.
+        if auth_requested and not proxy_flag.startswith(("socks5://", "socks4://")):
+            user, pw = proxy_auth or ("", "")
+            scheme, rest = proxy_flag.split("://", 1)
+            proxy_flag = f"{scheme}://{user}:{pw or ''}@{rest}"
+        options.add_argument(f"--proxy-server={proxy_flag}")
+
+    def start_browser(using_wire: bool):
+        local_driver = _locate_local_driver()
+        chrome_cls = wire_webdriver.Chrome if using_wire else webdriver.Chrome
+        service = Service(executable_path=str(local_driver)) if local_driver else None
+
+        if using_wire:
+            user, pw = proxy_auth or ("", "")
+            proxy_url = proxy or ""
+            if proxy_url:
+                proxy_url = with_scheme(proxy_url, scheme_pref)
+                if user and "://" in proxy_url:
+                    scheme, rest = proxy_url.split("://", 1)
+                    proxy_url = f"{scheme}://{user}:{pw or ''}@{rest}"
+            sw_options = {
+                "proxy": {
+                    "http": proxy_url,
+                    "https": proxy_url,
+                    "no_proxy": "localhost,127.0.0.1",
+                }
+            }
+            if service:
+                return chrome_cls(service=service, options=options, seleniumwire_options=sw_options)
+            return chrome_cls(options=options, seleniumwire_options=sw_options)
+
+        if service:
+            return chrome_cls(service=service, options=options)
+        return chrome_cls(options=options)
 
     try:
-        browser = webdriver.Chrome(options=options)
+        # Try selenium-wire when auth is present
+        if use_wire:
+            browser = start_browser(using_wire=True)
+        else:
+            browser = start_browser(using_wire=False)
         _apply_window_bounds(browser)
         return browser
-    except WebDriverException as exc:  # pragma: no cover
-        raise RuntimeError(
-            "Unable to launch ChromeDriver automatically. Install Google Chrome, ensure Selenium Manager "
-            "dependencies (including PowerShell) are available, or manually download chromedriver.exe "
-            "and place it in the 'drivers' folder (or set CHROMEDRIVER env). "
-            f"Original error: {exc}"
-        ) from exc
+    except Exception as exc:
+        # fallback to plain selenium if wire fails or missing
+        try:
+            browser = start_browser(using_wire=False)
+            _apply_window_bounds(browser)
+            return browser
+        except Exception as nested:
+            raise RuntimeError(
+                "Unable to launch ChromeDriver automatically. Install Google Chrome, ensure Selenium Manager "
+                "dependencies (including PowerShell) are available, or place chromedriver.exe in the 'drivers' "
+                f"folder (or set CHROMEDRIVER env). Original error: {nested}"
+            ) from nested
 
 
 def _apply_window_bounds(driver):
@@ -895,160 +1079,216 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 return elements[0]
         return None
 
+    def format_proxy(raw: str, scheme: str = "") -> str:
+        raw = (raw or "").strip()
+        if not raw:
+            return ""
+        sc = (scheme or "").lower().strip()
+        if raw.startswith(("http://", "https://", "socks5://", "socks4://")):
+            return raw
+        if sc:
+            return f"{sc}://{raw}"
+        if raw.endswith((":1080", ":1086")):
+            return f"socks5://{raw}"
+        return f"http://{raw}"
+
+    proxy_user, proxy_pass = get_proxy_auth()
+
     def join_class(cred):
         local_errors: list[str] = []
-        try:
-            # create a fresh browser per credential so existing joined classes stay open
-            driver = _build_driver(incognito=False, headless=False)
-            wait = WebDriverWait(driver, 25)
+        proxy_raw = cred.get("proxy") or ""
+        proxy_addr = format_proxy(proxy_raw, cred.get("proxy_scheme") or "")
+        row_proxy_user = str(cred.get("proxy_username") or "").strip()
+        row_proxy_pass = str(cred.get("proxy_password") or "").strip()
+        auth_user = row_proxy_user or proxy_user or ""
+        auth_pass = row_proxy_pass or proxy_pass or ""
+
+        def build_driver(proxy_val, auth_val):
+            return _build_driver(
+                incognito=False,
+                headless=False,
+                proxy=proxy_val if proxy_val else None,
+                proxy_auth=auth_val,
+                proxy_scheme=cred.get("proxy_scheme") or None,
+            )
+
+        def start_session(proxy_val, auth_val):
+            drv = build_driver(proxy_val, auth_val)
+            wt = WebDriverWait(drv, 25)
             with active_lock:
-                ACTIVE_DRIVERS.append({"driver": driver, "wait": wait})
-
-            driver.get(portal_url)
+                ACTIVE_DRIVERS.append({"driver": drv, "wait": wt})
+            drv.get(portal_url)
             time.sleep(1.5)
+            try:
+                if "ERR_NO_SUPPORTED_PROXIES" in drv.page_source:
+                    raise RuntimeError("Proxy unsupported by Chrome")
+            except Exception:
+                raise
+            return drv, wt
 
-            username_value = str(cred.get("username") or cred.get("id") or "").strip()
-            password_value = str(cred.get("password") or "").strip()
-            display_name = username_value or "Student"
-            if not username_value or not password_value:
-                local_errors.append("Excel file must include Username and Password columns.")
+        def cleanup_driver(drv):
+            if not drv:
+                return
+            with active_lock:
+                ACTIVE_DRIVERS[:] = [ctx for ctx in ACTIVE_DRIVERS if ctx.get("driver") is not drv]
+            with suppress(Exception):
+                drv.quit()
+
+        try:
+            driver, wait = start_session(proxy_addr, (auth_user, auth_pass) if auth_user else None)
+        except Exception as exc:
+            if proxy_addr:
+                cleanup_driver(locals().get("driver"))
+                # Do NOT fall back to direct; surface the proxy error and stop this credential
+                local_errors.append(f"Proxy failed: {exc}")
+                return local_errors
+            else:
+                local_errors.append(str(exc))
                 return local_errors
 
-            deadline = time.time() + 25
-            username_input = None
-            password_input = None
-            while time.time() < deadline and (not username_input or not password_input):
-                username_input = find_first(
-                    driver,
-                    [
-                        (By.NAME, "username"),
-                        (By.ID, "username"),
-                        (By.CSS_SELECTOR, "input[type='email']"),
-                        (By.CSS_SELECTOR, "input[type='text']"),
-                    ],
-                )
-                password_input = find_first(
-                    driver,
-                    [
-                        (By.NAME, "password"),
-                        (By.ID, "password"),
-                        (By.CSS_SELECTOR, "input[type='password']"),
-                    ],
-                )
-                if username_input and password_input:
+        username_value = str(cred.get("username") or cred.get("id") or "").strip()
+        password_value = str(cred.get("password") or "").strip()
+        display_name = username_value or "Student"
+        if not username_value or not password_value:
+            local_errors.append("Excel file must include Username and Password columns.")
+            return local_errors
+
+        deadline = time.time() + 25
+        username_input = None
+        password_input = None
+        while time.time() < deadline and (not username_input or not password_input):
+            username_input = find_first(
+                driver,
+                [
+                    (By.NAME, "username"),
+                    (By.ID, "username"),
+                    (By.CSS_SELECTOR, "input[type='email']"),
+                    (By.CSS_SELECTOR, "input[type='text']"),
+                ],
+            )
+            password_input = find_first(
+                driver,
+                [
+                    (By.NAME, "password"),
+                    (By.ID, "password"),
+                    (By.CSS_SELECTOR, "input[type='password']"),
+                ],
+            )
+            if username_input and password_input:
+                break
+            time.sleep(0.3)
+
+        if not username_input or not password_input:
+            local_errors.append("Login form not found on the portal.")
+            cleanup_driver(locals().get("driver"))
+            return local_errors
+
+        username_input.clear()
+        username_input.send_keys(username_value)
+        password_input.clear()
+        password_input.send_keys(password_value)
+        password_input.send_keys(Keys.TAB)
+        time.sleep(0.4)
+
+        sign_in = find_first(
+            driver,
+            [
+                (By.XPATH, "//button[normalize-space()='Sign In']"),
+                (By.XPATH, "//button[normalize-space()='Sign in']"),
+                (By.XPATH, "//button[normalize-space()='Signin']"),
+                (By.CSS_SELECTOR, "input[type='submit']"),
+            ],
+        )
+        if sign_in:
+            sign_in.click()
+
+        try:
+            target = wait.until(EC.element_to_be_clickable((By.XPATH, target_xpath)))
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", target)
+            except Exception:
+                pass
+            target.click()
+        except Exception as exc:
+            local_errors.append(f"Target card not found: {exc}")
+            cleanup_driver(locals().get("driver"))
+            return local_errors
+
+        followup_xpath = "/html/body/div[1]/div[2]/div/div[2]/div/div[2]/h3[2]/span/a"
+        try:
+            handles_before = set(driver.window_handles)
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                handles_now = set(driver.window_handles)
+                new_handles = list(handles_now - handles_before)
+                if new_handles:
+                    driver.switch_to.window(new_handles[0])
                     break
                 time.sleep(0.3)
 
-            if not username_input or not password_input:
-                local_errors.append("Login form not found on the portal.")
-                return local_errors
+            zoom_handle = None
+            for handle in driver.window_handles:
+                driver.switch_to.window(handle)
+                if "zoom.us" in (driver.current_url or ""):
+                    zoom_handle = handle
+                    break
+            if zoom_handle:
+                driver.switch_to.window(zoom_handle)
 
-            username_input.clear()
-            username_input.send_keys(username_value)
-            password_input.clear()
-            password_input.send_keys(password_value)
-            password_input.send_keys(Keys.TAB)
-            time.sleep(0.4)
-
-            sign_in = find_first(
-                driver,
-                [
-                    (By.XPATH, "//button[normalize-space()='Sign In']"),
-                    (By.XPATH, "//button[normalize-space()='Sign in']"),
-                    (By.XPATH, "//button[normalize-space()='Signin']"),
-                    (By.CSS_SELECTOR, "input[type='submit']"),
-                ],
-            )
-            if sign_in:
-                sign_in.click()
+            followup = None
+            try:
+                followup = wait.until(EC.element_to_be_clickable((By.XPATH, followup_xpath)))
+            except Exception:
+                pass
+            if followup:
+                followup.click()
+            else:
+                join_link = wait.until(
+                    EC.element_to_be_clickable(
+                        (By.XPATH, "//a[contains(normalize-space(),'Join from your browser')]")
+                    )
+                )
+                join_link.click()
 
             try:
-                target = wait.until(EC.element_to_be_clickable((By.XPATH, target_xpath)))
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", target)
-                except Exception:
-                    pass
-                target.click()
-            except Exception as exc:
-                local_errors.append(f"Target card not found: {exc}")
-                return local_errors
+                click_continue_without_mic_camera(driver, timeout=20)
+            except Exception:
+                pass
 
-            followup_xpath = "/html/body/div[1]/div[2]/div/div[2]/div/div[2]/h3[2]/span/a"
             try:
-                handles_before = set(driver.window_handles)
-                deadline = time.time() + 15
-                while time.time() < deadline:
-                    handles_now = set(driver.window_handles)
-                    new_handles = list(handles_now - handles_before)
-                    if new_handles:
-                        driver.switch_to.window(new_handles[0])
-                        break
-                    time.sleep(0.3)
-
-                zoom_handle = None
-                for handle in driver.window_handles:
-                    driver.switch_to.window(handle)
-                    if "zoom.us" in (driver.current_url or ""):
-                        zoom_handle = handle
-                        break
-                if zoom_handle:
-                    driver.switch_to.window(zoom_handle)
-
-                followup = None
-                try:
-                    followup = wait.until(EC.element_to_be_clickable((By.XPATH, followup_xpath)))
-                except Exception:
-                    pass
-                if followup:
-                    followup.click()
-                else:
-                    join_link = wait.until(
-                        EC.element_to_be_clickable(
-                            (By.XPATH, "//a[contains(normalize-space(),'Join from your browser')]")
-                        )
+                followup_button = wait.until(
+                    EC.element_to_be_clickable(
+                        (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
                     )
-                    join_link.click()
+                )
+                followup_button.click()
+            except Exception:
+                pass
 
+            try:
+                disable_zoom_media_prompts(driver, timeout=10)
+            except Exception:
+                pass
+
+            try:
+                name_input = find_name_input(driver, timeout=10)
                 try:
-                    click_continue_without_mic_camera(driver, timeout=20)
+                    name_input.clear()
                 except Exception:
                     pass
-
                 try:
-                    followup_button = wait.until(
-                        EC.element_to_be_clickable(
-                            (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
-                        )
-                    )
-                    followup_button.click()
+                    name_input.send_keys(display_name)
                 except Exception:
                     pass
-
-                try:
-                    disable_zoom_media_prompts(driver, timeout=10)
-                except Exception:
-                    pass
-
-                try:
-                    name_input = find_name_input(driver, timeout=10)
-                    try:
-                        name_input.clear()
-                    except Exception:
-                        pass
-                    try:
-                        name_input.send_keys(display_name)
-                    except Exception:
-                        pass
-                    name_input.send_keys(Keys.RETURN)
-                    time.sleep(2)
-                except Exception as e:
-                    print(e)
-                    pass
-            except Exception as exc:
-                local_errors.append(f"Follow-up target not found: {exc}")
-                return local_errors
+                name_input.send_keys(Keys.RETURN)
+                time.sleep(2)
+            except Exception as e:
+                print(e)
+                pass
         except Exception as exc:
-            local_errors.append(str(exc))
+            local_errors.append(f"Follow-up target not found: {exc}")
+            cleanup_driver(locals().get("driver"))
+            return local_errors
         return local_errors
 
     with ThreadPoolExecutor(max_workers=thread_count) as executor:
