@@ -13,6 +13,7 @@ from utility import (
     _init_db,
     _ensure_parent,
     REPORTS_DIR,
+    close_zoom_sessions,
     delete_storage_data,
     download_template,
     get_db_path,
@@ -792,6 +793,9 @@ class Api:
 
     def reset_all_data(self):
         return reset_all_data()
+
+    def logout_zoom_sessions(self):
+        return close_zoom_sessions()
 
 
 def main():

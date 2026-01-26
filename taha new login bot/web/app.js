@@ -20,7 +20,8 @@ const loginBtn = document.getElementById("login-btn");
 const zoomUploadBtn = document.getElementById("zoom-upload-btn");
 const zoomUploadStatus = document.getElementById("zoom-upload-status");
 const zoomJoinBtn = document.getElementById("zoom-join-btn");
-const zoomThreadInput = document.getElementById("zoom-thread-count");
+const zoomThreadInput = document.getElementById("zoom-threads");
+const zoomLogoutBtn = document.getElementById("zoom-logout-btn");
 const threadInput = document.getElementById("thread-count");
 const incognitoToggle = document.getElementById("incognito-toggle");
 const headlessToggle = document.getElementById("headless-toggle");
@@ -205,6 +206,13 @@ function validateThreadCount(value) {
   return parsed;
 }
 
+function validateZoomThreadCount(value) {
+  const parsed = parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed < 1) return 1;
+  if (parsed > 10) return 10;
+  return parsed;
+}
+
 async function handleLogin() {
   const source = uploadByStored && uploadByStored.checked ? "stored" : "file";
   const testingOnly = !!(testingOnlyToggle && testingOnlyToggle.checked);
@@ -326,15 +334,28 @@ if (zoomJoinBtn) {
         return;
       }
       const result = await safeCall(
-        () =>
-          api.open_zoom_portal({
-            threads: validateThreadCount(zoomThreadInput ? zoomThreadInput.value : 1),
-          }),
+        () => api.open_zoom_portal({ threads: 1 }),
         "Failed to open Zoom portal."
       );
       if (result && result.error) {
         showUploadReminder(result.error);
       }
+    } catch (error) {
+      showUploadReminder(error.message);
+    }
+  });
+}
+
+if (zoomLogoutBtn) {
+  zoomLogoutBtn.addEventListener("click", async () => {
+    try {
+      if (!api || typeof api.logout_zoom_sessions !== "function") {
+        showUploadReminder("Logout API not available. Restart the app.");
+        return;
+      }
+      const result = await safeCall(() => api.logout_zoom_sessions(), "Failed to logout sessions.");
+      const closed = result && typeof result.closed === "number" ? result.closed : 0;
+      setStatus(zoomUploadStatus, `Closed ${closed} browser(s).`);
     } catch (error) {
       showUploadReminder(error.message);
     }

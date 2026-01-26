@@ -40,6 +40,8 @@ TEMPLATES_DIR = APP_DATA_DIR / "templates"
 CURRENT_PORTAL = "connect"
 LEGACY_DB_PATH = DATA_DIR / "taha_bot.db"
 DB_PATH = DATA_DIR / "taha_bot_connect.db"
+DEFAULT_WINDOW_SIZE = (1400, 900)
+DEFAULT_WINDOW_POS = (0, 0)
 ATTENDANCE_HEADERS = [
     "SNo.",
     "Client Email",
@@ -351,44 +353,47 @@ def _build_driver(incognito: bool = False, headless: bool = False):
         raise RuntimeError("Selenium is required. Install via 'pip install selenium'.") from exc
 
     options = Options()
+    viewport = f"--window-size={DEFAULT_WINDOW_SIZE[0]},{DEFAULT_WINDOW_SIZE[1]}"
     if headless:
         options.add_argument("--headless=new")
-        options.add_argument("--window-size=1280,900")
+        options.add_argument(viewport)
     else:
-        options.add_argument("--start-maximized")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-site-isolation-trials")
-    options.add_argument("--autoplay-policy=no-user-gesture-required")
+        options.add_argument(viewport)
+        options.add_argument(f"--window-position={DEFAULT_WINDOW_POS[0]},{DEFAULT_WINDOW_POS[1]}")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--disable-geolocation")
     options.add_argument("--disable-infobars")
+    options.add_argument("--disable-extensions")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("prefs", {"download_restrictions": 3})  # block all downloads
-
-    # Block pop-ups, notifications, and new window prompts.
-    # prefs = {
-    #     "profile.default_content_setting_values.notifications": 2,
-    #     "profile.default_content_setting_values.popups": 2,
-    #     "profile.default_content_setting_values.geolocation": 2,
-    #     "profile.default_content_setting_values.media_stream_mic": 2,
-    #     "profile.default_content_setting_values.media_stream_camera": 2,
-    # # }
-    # options.add_experimental_option("prefs", prefs)
+    options.add_argument("--use-fake-ui-for-media-stream")
+    options.add_argument("--use-fake-device-for-media-stream")
+    prefs = {
+        "profile.default_content_setting_values.notifications": 2,
+        "profile.default_content_setting_values.popups": 2,
+        "profile.default_content_setting_values.geolocation": 2,
+        "profile.default_content_setting_values.media_stream_mic": 2,
+        "profile.default_content_setting_values.media_stream_camera": 2,
+    }
+    options.add_experimental_option("prefs", prefs)
     if incognito:
         options.add_argument("--incognito")
 
     local_driver = _locate_local_driver()
     if local_driver:
         try:
-            return webdriver.Chrome(service=Service(executable_path=str(local_driver)), options=options)
+            browser = webdriver.Chrome(service=Service(executable_path=str(local_driver)), options=options)
         except WebDriverException as nested_exc:
             raise RuntimeError(
                 "ChromeDriver was found locally but could not be started. "
                 f"Original error: {nested_exc}"
             ) from nested_exc
+        _apply_window_bounds(browser)
+        return browser
 
     try:
-        return webdriver.Chrome(options=options)
+        browser = webdriver.Chrome(options=options)
+        _apply_window_bounds(browser)
+        return browser
     except WebDriverException as exc:  # pragma: no cover
         raise RuntimeError(
             "Unable to launch ChromeDriver automatically. Install Google Chrome, ensure Selenium Manager "
@@ -396,6 +401,15 @@ def _build_driver(incognito: bool = False, headless: bool = False):
             "and place it in the 'drivers' folder (or set CHROMEDRIVER env). "
             f"Original error: {exc}"
         ) from exc
+
+
+def _apply_window_bounds(driver):
+    """Keep all automation windows on-screen with a consistent viewport."""
+    try:
+        driver.set_window_position(*DEFAULT_WINDOW_POS)
+        driver.set_window_size(*DEFAULT_WINDOW_SIZE)
+    except Exception:
+        pass
 
 
 def _close_active_drivers():
@@ -406,6 +420,13 @@ def _close_active_drivers():
         except Exception:
             pass
     ACTIVE_DRIVERS = []
+
+
+def close_zoom_sessions() -> dict:
+    """Close all active browser sessions opened for Zoom automation."""
+    total = len(ACTIVE_DRIVERS)
+    _close_active_drivers()
+    return {"closed": total, "error": ""}
 
 
 def run_login_batch(
@@ -440,9 +461,6 @@ def run_login_batch(
     browser_error = ""
     drivers: list[dict] = []
 
-    # Helper to (re)build a fresh driver. Recreated when Selenium reports
-    # "invalid session id", which usually means Chrome closed or the session
-    # crashed between iterations.
     def _new_driver():
         browser = _build_driver(incognito=incognito, headless=headless)
         wait_obj = WebDriverWait(browser, 20)
@@ -494,7 +512,13 @@ def run_login_batch(
                     password_input.send_keys(password_value)
                     password_input.send_keys(Keys.TAB)
                     time.sleep(0.5)
-
+                    try:
+                        browser.execute_script(
+                            "arguments[0].scrollIntoView({behavior:'smooth', block:'center'});",
+                            submit_btn,
+                        )
+                    except Exception:
+                        pass
                     submit_btn.click()
                     time.sleep(2.5)
 
@@ -523,6 +547,13 @@ def run_login_batch(
                     if capture_attendance and login_status == "Success":
                         try:
                             attendance_link = wait.until(EC.element_to_be_clickable(attendance_selector))
+                            try:
+                                browser.execute_script(
+                                    "arguments[0].scrollIntoView({behavior:'smooth', block:'center'});",
+                                    attendance_link,
+                                )
+                            except Exception:
+                                pass
                             attendance_link.click()
                             time.sleep(1.2)
                             row_element = wait.until(EC.presence_of_element_located(attendance_row_selector))
@@ -570,7 +601,8 @@ def run_login_batch(
                         finally:
                             drivers[driver_idx] = ctx = _new_driver()
                             browser = ctx["driver"]
-                            wait = ctx["wait"] # retry this credential once with fresh session
+                            wait = ctx["wait"]
+                        continue  # retry this credential once with fresh session
                     browser_error = msg
                     results.append(
                         {
@@ -610,9 +642,14 @@ def run_login_batch(
         "concurrency": concurrency,
         "browser_error": browser_error,
     }
-import time
+
+
 def click_continue_without_mic_camera(driver, timeout=20) -> bool:
-    """Iterate through iframes to press the 'Continue without' control (handles repeated prompts)."""
+    """Iterate through iframes to press any 'Continue without audio/video' control on Zoom join."""
+    try:
+        from selenium.webdriver.common.by import By
+    except Exception:
+        return False
     end_time = time.time() + timeout
     selectors = [
         ".pepc-permission-dialog__footer-button",
@@ -620,18 +657,32 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
         "[role='button']",
         "button",
         "span",
+        "a",
+    ]
+    keywords = [
+        r"continue without",
+        r"join without",
+        r"use computer audio later",
+        r"leave computer audio",
+        r"join from browser",
+        r"continue in browser",
+        r"skip.*audio",
+        r"skip.*video",
+        r"not now",
     ]
     js_click = """
         const selectors = arguments[0];
+        const keywords = arguments[1].map(k => new RegExp(k, 'i'));
         for (const selector of selectors) {
-            const nodes = Array.from(document.querySelectorAll(selector)).filter(el =>
-                /Continue without microphone and camera/i.test((el.innerText || el.textContent || '').trim())
-            );
-            if (nodes.length) {
-                const target = nodes[0];
-                target.scrollIntoView({behavior:'smooth', block:'center'});
-                target.click();
-                return true;
+            const nodes = Array.from(document.querySelectorAll(selector));
+            for (const node of nodes) {
+                const text = (node.innerText || node.textContent || '').trim();
+                if (!text) continue;
+                if (keywords.some(re => re.test(text))) {
+                    node.scrollIntoView({behavior:'smooth', block:'center'});
+                    node.click();
+                    return true;
+                }
             }
         }
         return false;
@@ -653,10 +704,10 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
                 driver.switch_to.default_content()
                 if frame is not None:
                     driver.switch_to.frame(frame)
-                if driver.execute_script(js_click, selectors):
+                if driver.execute_script(js_click, selectors, keywords):
                     clicked_once = True
                     clicked_this_pass = True
-                    break  # re-evaluate: prompt might reappear in same or another context
+                    break
             except Exception:
                 continue
         if clicked_this_pass:
@@ -675,7 +726,6 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
         pass
     return clicked_once
 
-from selenium.webdriver.common.by import By
 
 def find_name_input(driver, timeout=20):
     """Locate the meeting name input regardless of iframe nesting."""
@@ -728,10 +778,95 @@ def find_name_input(driver, timeout=20):
         raise TimeoutException(f"Name input not found: {last_error}")
     raise TimeoutException("Name input not found")
 
+
+def disable_zoom_media_prompts(driver, timeout=20):
+    """
+    Ensure Zoom join page proceeds without requesting mic/camera by clicking
+    any 'Join/Continue without audio/video' controls and toggling media buttons off.
+    """
+    try:
+        from selenium.webdriver.common.by import By
+    except Exception:
+        return False
+    end_time = time.time() + timeout
+    attempted = False
+    while time.time() < end_time:
+        clicked = click_continue_without_mic_camera(driver, timeout=4)
+        attempted = attempted or clicked
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        explicit_targets = [
+            "/html/body/div[2]/div[2]/div/div[1]/div/div[1]/div/div[1]/div[1]/button[1]/div/div",
+            "//*[@id='preview-video-control-button']",
+            "//*[@id='preview-video-control-button']/svg",
+            "//*[@id='root']/div/div[1]/div/div[2]/button",
+        ]
+        try:
+            contexts = [None]
+            try:
+                contexts.extend(driver.find_elements(By.TAG_NAME, "iframe"))
+            except Exception:
+                pass
+            for frame in contexts:
+                try:
+                    driver.switch_to.default_content()
+                    if frame is not None:
+                        driver.switch_to.frame(frame)
+                    for xp in explicit_targets:
+                        try:
+                            target = driver.find_element(By.XPATH, xp)
+                            target.location_once_scrolled_into_view
+                            target.click()
+                            attempted = True
+                            raise StopIteration  # break both loops
+                        except Exception:
+                            continue
+                except StopIteration:
+                    raise
+                except Exception:
+                    continue
+        except StopIteration:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+            return True
+        try:
+            mute_btns = driver.find_elements(By.CSS_SELECTOR, "[aria-label*='Mute'],[aria-label*='muted']")
+            for btn in mute_btns:
+                label = (btn.get_attribute("aria-pressed") or "").lower()
+                if label == "false":
+                    try:
+                        btn.click()
+                        attempted = True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            video_btns = driver.find_elements(By.CSS_SELECTOR, "[aria-label*='Start Video'],[aria-label*='Start video']")
+            for btn in video_btns:
+                pressed = (btn.get_attribute("aria-pressed") or "").lower()
+                if pressed == "false":
+                    try:
+                        btn.click()
+                        attempted = True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        if attempted:
+            return True
+        time.sleep(0.4)
+    return attempted
+
+
 def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str, threads: int = 1):
     """
     Open the portal in Chrome, sign in with one or more credentials, and click the target card.
-    The number of browser instances is limited by `threads` and the credential count.
+    The number of browser instances is limited by `threads` and the credential count; all credentials are processed.
     """
     if not credentials:
         raise RuntimeError("No Zoom credentials available.")
@@ -745,26 +880,27 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
     except ImportError as exc:  # pragma: no cover - surfaced to UI
         raise RuntimeError("Selenium is required for Zoom portal automation.") from exc
 
-    threads = max(1, int(threads or 1))
-    threads = min(threads, len(credentials))
+    # Temporarily force single-threaded processing to ensure every client from Excel is handled in order.
+    thread_count = 1
 
     _close_active_drivers()
     errors: list[str] = []
-    for idx in range(threads):
-        cred = credentials[idx]
+
+    def find_first(driver, selectors):
+        for by, sel in selectors:
+            elements = driver.find_elements(by, sel)
+            if elements:
+                return elements[0]
+        return None
+
+    for idx, cred in enumerate(credentials):
+        # create a fresh browser per credential so existing joined classes stay open
         driver = _build_driver(incognito=False, headless=False)
         wait = WebDriverWait(driver, 25)
         ACTIVE_DRIVERS.append({"driver": driver, "wait": wait})
 
         driver.get(portal_url)
         time.sleep(1.5)
-
-        def find_first(selectors):
-            for by, sel in selectors:
-                elements = driver.find_elements(by, sel)
-                if elements:
-                    return elements[0]
-            return None
 
         username_value = str(cred.get("username") or cred.get("id") or "").strip()
         password_value = str(cred.get("password") or "").strip()
@@ -778,19 +914,21 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
         password_input = None
         while time.time() < deadline and (not username_input or not password_input):
             username_input = find_first(
+                driver,
                 [
                     (By.NAME, "username"),
                     (By.ID, "username"),
                     (By.CSS_SELECTOR, "input[type='email']"),
                     (By.CSS_SELECTOR, "input[type='text']"),
-                ]
+                ],
             )
             password_input = find_first(
+                driver,
                 [
                     (By.NAME, "password"),
                     (By.ID, "password"),
                     (By.CSS_SELECTOR, "input[type='password']"),
-                ]
+                ],
             )
             if username_input and password_input:
                 break
@@ -808,18 +946,23 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
         time.sleep(0.4)
 
         sign_in = find_first(
+            driver,
             [
                 (By.XPATH, "//button[normalize-space()='Sign In']"),
                 (By.XPATH, "//button[normalize-space()='Sign in']"),
                 (By.XPATH, "//button[normalize-space()='Signin']"),
                 (By.CSS_SELECTOR, "input[type='submit']"),
-            ]
+            ],
         )
         if sign_in:
             sign_in.click()
 
         try:
             target = wait.until(EC.element_to_be_clickable((By.XPATH, target_xpath)))
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", target)
+            except Exception:
+                pass
             target.click()
         except Exception as exc:
             errors.append(f"Target card not found: {exc}")
@@ -837,7 +980,6 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                     break
                 time.sleep(0.3)
 
-            # If the Zoom page opened in another existing tab, switch to it.
             zoom_handle = None
             for handle in driver.window_handles:
                 driver.switch_to.window(handle)
@@ -862,7 +1004,6 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 )
                 join_link.click()
 
-            # Dismiss Zoom media prompt if it appears (handles iframe prompts).
             try:
                 click_continue_without_mic_camera(driver, timeout=20)
             except Exception:
@@ -879,6 +1020,11 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 pass
 
             try:
+                disable_zoom_media_prompts(driver, timeout=10)
+            except Exception:
+                pass
+
+            try:
                 name_input = find_name_input(driver, timeout=10)
                 try:
                     name_input.clear()
@@ -890,7 +1036,7 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                     pass
                 name_input.send_keys(Keys.RETURN)
                 time.sleep(2)
-            except Exception as e :
+            except Exception as e:
                 print(e)
                 pass
         except Exception as exc:
