@@ -5,7 +5,7 @@ a = Analysis(
     ['taha_college_detail.py'],
     pathex=[],
     binaries=[],
-    datas=[('web', 'web'), ('templates', 'templates'), ('drivers', 'drivers'), ('data', 'data')],
+    datas=[('D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha new login bot\\web', 'web'), ('D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha new login bot\\templates', 'templates'), ('D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha new login bot\\drivers', 'drivers'), ('D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha new login bot\\data', 'data')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

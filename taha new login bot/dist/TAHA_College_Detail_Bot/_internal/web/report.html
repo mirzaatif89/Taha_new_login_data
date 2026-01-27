@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Report Section</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand brand-link" href="index.html" aria-label="Go to dashboard">
+        <div class="brand__logo">TAHA</div>
+        <div class="brand__text">
+          <span>Report Section</span>
+          <small>Stored login and report history</small>
+        </div>
+      </a>
+      <div class="masthead__actions">
+        <button id="refresh-btn" class="btn ghost small" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="page report-page">
+      <section class="search-panel">
+        <div>
+          <h2>Search Client</h2>
+          <p>Search by username/email across all report cards.</p>
+        </div>
+        <div class="search-bar">
+          <input id="report-search-input" type="text" placeholder="Enter username or email" />
+          <select id="report-search-filter" class="search-filter" aria-label="Search filter">
+            <option value="all">All</option>
+            <option value="credentials">Credentials</option>
+            <option value="login-status">Login Status</option>
+            <option value="last-attendance">Last Attendance</option>
+            <option value="credit-hours">Credit Hours</option>
+          </select>
+          <button id="report-search-btn" class="btn primary" type="button">Search</button>
+        </div>
+        <div class="status" id="report-search-status">Enter a client username to search.</div>
+        <div class="search-results" id="report-search-results"></div>
+      </section>
+
+      <section class="panel grid-2 report-panel">
+        <article class="card">
+          <header>
+            <h2>Credentials</h2>
+            <p>Client usernames and passwords saved from uploads.</p>
+          </header>
+          <a class="btn ghost" href="report_credentials.html">Open</a>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>Login Status</h2>
+            <p>Latest login status for each client.</p>
+          </header>
+          <a class="btn ghost" href="report_login_status.html">Open</a>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>Clients Attendance</h2>
+            <p>Attendance snapshots captured from the portal.</p>
+          </header>
+          <a class="btn ghost" href="report_attendance.html">Open</a>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>Credit Hours</h2>
+            <p>Estimated hours based on total time.</p>
+          </header>
+          <a class="btn ghost" href="report_credit_hours.html">Open</a>
+        </article>
+
+        <article class="card">
+          <header>
+            <h2>Downloads</h2>
+            <p>Open the reports folder to view exported files.</p>
+          </header>
+          <button class="btn ghost" type="button" id="downloads-open">Open</button>
+        </article>
+      </section>
+    </main>
+
+    <div class="shape shape-one"></div>
+    <div class="shape shape-two"></div>
+
+    <div class="nav-arrows" aria-label="Page navigation">
+      <button class="nav-arrow" type="button" data-nav="back" aria-label="Go back">&lt;</button>
+      <button class="nav-arrow" type="button" data-nav="forward" aria-label="Go forward">&gt;</button>
+    </div>
+
+    <script src="theme.js"></script>
+    <script src="nav.js"></script>
+    <script src="refresh.js"></script>
+    <script src="report_search.js"></script>
+  </body>
+</html>

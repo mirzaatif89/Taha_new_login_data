@@ -1,0 +1,70 @@
+('D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha '
+ 'new login bot\\build\\TAHA_College_Detail_Bot\\TAHA_College_Detail_Bot.pkg',
+ {'BINARY': True,
+  'DATA': True,
+  'EXECUTABLE': True,
+  'EXTENSION': True,
+  'PYMODULE': True,
+  'PYSOURCE': True,
+  'PYZ': False,
+  'SPLASH': True,
+  'SYMLINK': False},
+ [('pyi-contents-directory _internal', '', 'OPTION'),
+  ('PYZ-00.pyz',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha '
+   'new login bot\\build\\TAHA_College_Detail_Bot\\PYZ-00.pyz',
+   'PYZ'),
+  ('struct',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha '
+   'new login bot\\build\\TAHA_College_Detail_Bot\\localpycs\\struct.pyc',
+   'PYMODULE'),
+  ('pyimod01_archive',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha '
+   'new login '
+   'bot\\build\\TAHA_College_Detail_Bot\\localpycs\\pyimod01_archive.pyc',
+   'PYMODULE'),
+  ('pyimod02_importers',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha '
+   'new login '
+   'bot\\build\\TAHA_College_Detail_Bot\\localpycs\\pyimod02_importers.pyc',
+   'PYMODULE'),
+  ('pyimod03_ctypes',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha '
+   'new login '
+   'bot\\build\\TAHA_College_Detail_Bot\\localpycs\\pyimod03_ctypes.pyc',
+   'PYMODULE'),
+  ('pyimod04_pywin32',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha '
+   'new login '
+   'bot\\build\\TAHA_College_Detail_Bot\\localpycs\\pyimod04_pywin32.pyc',
+   'PYMODULE'),
+  ('pyiboot01_bootstrap',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\venv\\Lib\\site-packages\\PyInstaller\\loader\\pyiboot01_bootstrap.py',
+   'PYSOURCE'),
+  ('pyi_rth_inspect',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_inspect.py',
+   'PYSOURCE'),
+  ('pyi_rth_pkgutil',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_pkgutil.py',
+   'PYSOURCE'),
+  ('pyi_rth_multiprocessing',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_multiprocessing.py',
+   'PYSOURCE'),
+  ('pyi_rth_setuptools',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks\\pyi_rth_setuptools.py',
+   'PYSOURCE'),
+  ('pyi_rth_cryptography_openssl',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks\\pyi_rth_cryptography_openssl.py',
+   'PYSOURCE'),
+  ('taha_college_detail',
+   'D:\\Project\\TahaScrapperApp\\Taha_New_Login_Bot\\Taha_new_login_data\\taha '
+   'new login bot\\taha_college_detail.py',
+   'PYSOURCE')],
+ 'python311.dll',
+ True,
+ False,
+ False,
+ [],
+ None,
+ None,
+ None)
