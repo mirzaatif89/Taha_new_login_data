@@ -370,14 +370,14 @@ def _build_driver(incognito: bool = False, headless: bool = False):
     options.add_experimental_option("useAutomationExtension", False)
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("prefs", {"download_restrictions": 3})
-    prefs = {
-        "profile.default_content_setting_values.notifications": 2,
-        "profile.default_content_setting_values.popups": 2,
-        "profile.default_content_setting_values.geolocation": 2,
-        "profile.default_content_setting_values.media_stream_mic": 2,
-        "profile.default_content_setting_values.media_stream_camera": 2,
-    }
-    options.add_experimental_option("prefs", prefs)
+    # prefs = {
+    #     "profile.default_content_setting_values.notifications": 2,
+    #     "profile.default_content_setting_values.popups": 2,
+    #     "profile.default_content_setting_values.geolocation": 2,
+    #     "profile.default_content_setting_values.media_stream_mic": 2,
+    #     "profile.default_content_setting_values.media_stream_camera": 2,
+    # }
+    # options.add_experimental_option("prefs", prefs)
     if incognito:
         options.add_argument("--incognito")
 
@@ -645,6 +645,7 @@ def run_login_batch(
         "concurrency": concurrency,
         "browser_error": browser_error,
     }
+
 
 
 def click_continue_without_mic_camera(driver, timeout=20) -> bool:
@@ -1017,7 +1018,8 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
 
                 try:
                     click_continue_without_mic_camera(driver, timeout=20)
-                except Exception:
+                except Exception as e:
+                    print('click_continue_without_mic_camera',e)
                     pass
 
                 try:
@@ -1048,7 +1050,7 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                     name_input.send_keys(Keys.RETURN)
                     time.sleep(2)
                 except Exception as e:
-                    print(e)
+                    print('name input',e)
                     pass
             except Exception as exc:
                 local_errors.append(f"Follow-up target not found: {exc}")
