@@ -362,13 +362,14 @@ def _build_driver(incognito: bool = False, headless: bool = False):
     else:
         options.add_argument(viewport)
         options.add_argument(f"--window-position={DEFAULT_WINDOW_POS[0]},{DEFAULT_WINDOW_POS[1]}")
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-geolocation")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-site-isolation-trials")
+    options.add_argument("--autoplay-policy=no-user-gesture-required")
     options.add_argument("--disable-infobars")
-    options.add_argument("--disable-extensions")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_argument("--use-fake-ui-for-media-stream")
-    options.add_argument("--use-fake-device-for-media-stream")
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("prefs", {"download_restrictions": 3})
     prefs = {
         "profile.default_content_setting_values.notifications": 2,
         "profile.default_content_setting_values.popups": 2,
@@ -900,6 +901,7 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
         try:
             # create a fresh browser per credential so existing joined classes stay open
             driver = _build_driver(incognito=False, headless=False)
+            driver.maximize_window()
             wait = WebDriverWait(driver, 25)
             with active_lock:
                 ACTIVE_DRIVERS.append({"driver": driver, "wait": wait})
@@ -964,12 +966,16 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
 
             try:
                 target = wait.until(EC.element_to_be_clickable((By.XPATH, target_xpath)))
-                try:
-                    driver.execute_script("arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", target)
-                except Exception:
-                    pass
+                driver.execute_script(
+                    "const el = arguments[0];"
+                    "const y = el.getBoundingClientRect().top + window.pageYOffset - 150;"
+                    "window.scrollTo({top: y, behavior: 'smooth'});",
+                    target,
+                )
+                time.sleep(0.4)
                 target.click()
             except Exception as exc:
+                print(exc)
                 local_errors.append(f"Target card not found: {exc}")
                 return local_errors
 
