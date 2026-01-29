@@ -731,6 +731,7 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
     return clicked_once
 
 
+
 def find_name_input(driver, timeout=20):
     """Locate the meeting name input regardless of iframe nesting."""
     from selenium.webdriver.common.by import By
@@ -740,13 +741,14 @@ def find_name_input(driver, timeout=20):
 
     end_time = time.time() + timeout
     selectors = [
+        (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/div[2]/div/input"),
         (By.CSS_SELECTOR, "input[name='name']"),
         (By.CSS_SELECTOR, "input#name"),
         (By.CSS_SELECTOR, "input#inputname"),
         (By.CSS_SELECTOR, "input.zm-input__input"),
         (By.XPATH, "//input[contains(@placeholder, 'Name')]"),
         (By.XPATH, "//input[contains(@aria-label, 'name')]"),
-        (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/div[2]/div/input"),
+        
     ]
     last_error = None
     while time.time() < end_time:
@@ -781,6 +783,7 @@ def find_name_input(driver, timeout=20):
     if last_error:
         raise TimeoutException(f"Name input not found: {last_error}")
     raise TimeoutException("Name input not found")
+
 
 
 def disable_zoom_media_prompts(driver, timeout=20):
@@ -870,7 +873,7 @@ def disable_zoom_media_prompts(driver, timeout=20):
 def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str, threads: int = 1):
     """
     Open the portal in Chrome, sign in with one or more credentials, and click the target card.
-    The number of browser instances is limited by `threads` and the credential count; all credentials are processed.
+    All credentials are processed. When threads=1 we run strictly sequentially.
     """
     if not credentials:
         raise RuntimeError("No Zoom credentials available.")
@@ -899,9 +902,16 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
 
     def join_class(cred):
         local_errors: list[str] = []
+        driver = None
         try:
+            # Allow generous time per credential but still avoid infinite hangs.
+            overall_deadline = time.time() + 240
             # create a fresh browser per credential so existing joined classes stay open
             driver = _build_driver(incognito=False, headless=False)
+            try:
+                driver.set_page_load_timeout(60)
+            except Exception:
+                pass
             driver.maximize_window()
             wait = WebDriverWait(driver, 25)
             with active_lock:
@@ -913,6 +923,7 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
             username_value = str(cred.get("username") or cred.get("id") or "").strip()
             password_value = str(cred.get("password") or "").strip()
             display_name = username_value or "Student"
+            print(f"[JOIN] Starting credential: {display_name}")
             if not username_value or not password_value:
                 local_errors.append("Excel file must include Username and Password columns.")
                 return local_errors
@@ -921,6 +932,9 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
             username_input = None
             password_input = None
             while time.time() < deadline and (not username_input or not password_input):
+                if time.time() > overall_deadline:
+                    local_errors.append("Timed out locating login fields.")
+                    return local_errors
                 username_input = find_first(
                     driver,
                     [
@@ -966,6 +980,9 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 sign_in.click()
 
             try:
+                if time.time() > overall_deadline:
+                    local_errors.append("Timed out before course card click.")
+                    return local_errors
                 target = wait.until(EC.element_to_be_clickable((By.XPATH, target_xpath)))
                 driver.execute_script(
                     "const el = arguments[0];"
@@ -985,6 +1002,9 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 handles_before = set(driver.window_handles)
                 deadline = time.time() + 15
                 while time.time() < deadline:
+                    if time.time() > overall_deadline:
+                        local_errors.append("Timed out waiting for Zoom window.")
+                        return local_errors
                     handles_now = set(driver.window_handles)
                     new_handles = list(handles_now - handles_before)
                     if new_handles:
@@ -1009,6 +1029,9 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 if followup:
                     followup.click()
                 else:
+                    if time.time() > overall_deadline:
+                        local_errors.append("Timed out waiting for browser join link.")
+                        return local_errors
                     join_link = wait.until(
                         EC.element_to_be_clickable(
                             (By.XPATH, "//a[contains(normalize-space(),'Join from your browser')]")
@@ -1017,38 +1040,57 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                     join_link.click()
 
                 try:
-                    click_continue_without_mic_camera(driver, timeout=20)
+                    remaining = max(20, int(overall_deadline - time.time()))
+                    if remaining <= 0:
+                        local_errors.append("Timed out before handling Zoom prompts.")
+                        return local_errors
+                    click_continue_without_mic_camera(driver, timeout=remaining)
                 except Exception as e:
                     print('click_continue_without_mic_camera',e)
                     pass
 
-                try:
-                    followup_button = wait.until(
-                        EC.element_to_be_clickable(
-                            (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
-                        )
-                    )
-                    followup_button.click()
-                except Exception:
-                    pass
+                # try:
+                #     followup_button = wait.until(
+                #         EC.element_to_be_clickable(
+                #             (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
+                #         )
+                #     )
+                #     followup_button.click()
+                # except Exception:
+                #     pass
+
+                # try:
+                #     disable_zoom_media_prompts(driver, timeout=10)
+                # except Exception:
+                #     pass
 
                 try:
-                    disable_zoom_media_prompts(driver, timeout=10)
-                except Exception:
-                    pass
-
-                try:
-                    name_input = find_name_input(driver, timeout=10)
+                    remaining = max(15, int(overall_deadline - time.time()))
+                    if remaining <= 0:
+                        local_errors.append("Timed out before entering Zoom name.")
+                        return local_errors
+                    name_input = find_name_input(driver, timeout=remaining)
                     try:
                         name_input.clear()
                     except Exception:
                         pass
+                    # Zoom requires a display name before it lets the user fully join.
+                    # name_input.send_keys(display_name)
+                    name_input.send_keys(Keys.RETURN)
+                    # If there is an explicit Join button, click it as a safety net.
                     try:
-                        name_input.send_keys(display_name)
+                        join_buttons = driver.find_elements(
+                            By.XPATH,
+                            "//button[contains(translate(normalize-space(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'join')]"
+                        )
+                        if join_buttons:
+                            join_buttons[0].click()
                     except Exception:
                         pass
-                    name_input.send_keys(Keys.RETURN)
                     time.sleep(2)
+                    # After submitting the name, move on to the next credential
+                    print(f"[JOIN] Completed credential: {display_name}")
+                    return local_errors
                 except Exception as e:
                     print('name input',e)
                     pass
@@ -1057,20 +1099,39 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 return local_errors
         except Exception as exc:
             local_errors.append(str(exc))
+        finally:
+            # Leave browsers open by default (KEEP_BROWSER_OPEN=True). Flip to False if you want automatic cleanup.
+            try:
+                if driver and not KEEP_BROWSER_OPEN:
+                    driver.quit()
+            except Exception:
+                pass
         return local_errors
 
-    with ThreadPoolExecutor(max_workers=thread_count) as executor:
-        futures = [executor.submit(join_class, cred) for cred in credentials]
-        for future in as_completed(futures):
+    if thread_count == 1:
+        for cred in credentials:
             try:
-                errs = future.result()
+                errs = join_class(cred)
                 if errs:
                     errors.extend(errs)
-            except Exception as exc:  # pragma: no cover - worker crash
+                else:
+                    print(f"[JOIN] Finished with no errors.")
+            except Exception as exc:
                 errors.append(str(exc))
+    else:
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            futures = [executor.submit(join_class, cred) for cred in credentials]
+            for future in as_completed(futures):
+                try:
+                    errs = future.result()
+                    if errs:
+                        errors.extend(errs)
+                except Exception as exc:  # pragma: no cover - worker crash
+                    errors.append(str(exc))
 
-    if errors:
-        raise RuntimeError("; ".join(errors))
+    # Return aggregated errors so caller can decide how to surface them,
+    # but do not stop the batch after the first failure.
+    return errors
 
 
 def save_login_course_report(results: Iterable[dict]):
