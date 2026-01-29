@@ -57,6 +57,15 @@ ATTENDANCE_HEADERS = [
     "Login Status",
     "Login Detail",
 ]
+ZOOM_PROXY_COLUMNS = [
+    "Username",
+    "Password",
+    "Proxy",
+    "Port",
+    "Proxy Scheme",
+    "Proxy Username",
+    "Proxy Password",
+]
 
 
 def _normalize_portal(portal: str) -> str:
@@ -251,7 +260,7 @@ def _ensure_columns(conn: sqlite3.Connection, table: str, columns: list[tuple[st
 
 
 def download_template(
-    template_source: Path,
+    template_source: Path | None = None,
     columns: Sequence[str] | None = None,
     default_filename: str = "login_template.xlsx",
     target_path: Path | None = None,
@@ -310,6 +319,75 @@ def load_credentials(file_path: Path, id_column: str, password_column: str):
     return records
 
 
+def download_zoom_template(
+    template_source: Path | None = None,
+    target_path: Path | None = None,
+    default_filename: str = "zoom_login_template.xlsx",
+):
+    """
+    Generate or copy a Zoom join template that includes proxy columns.
+    """
+    return download_template(
+        template_source=template_source,
+        columns=ZOOM_PROXY_COLUMNS,
+        default_filename=default_filename,
+        target_path=target_path,
+    )
+
+
+def load_zoom_credentials(file_path: Path) -> list[dict]:
+    """
+    Load Zoom credentials plus proxy settings from Excel/CSV.
+    Expected headers (case-insensitive):
+    Username, Password, Proxy, Port, Proxy Scheme, Proxy Username, Proxy Password.
+    """
+    if not file_path or not Path(file_path).is_file():
+        raise FileNotFoundError(f"Template not found: {file_path}")
+
+    suffix = file_path.suffix.lower()
+    if suffix in {".xlsx", ".xls", ".xlsm"}:
+        df = pd.read_excel(file_path)
+    elif suffix == ".csv":
+        df = pd.read_csv(file_path)
+    else:
+        raise ValueError("Unsupported file type. Use Excel or CSV.")
+
+    def normalize(col: str) -> str:
+        return col.strip().lower()
+
+    columns = {normalize(col): col for col in df.columns}
+    username_key = columns.get("username")
+    password_key = columns.get("password")
+    if not username_key or not password_key:
+        raise ValueError("Columns 'Username' and 'Password' are required.")
+
+    records: list[dict] = []
+    for _, row in df.iterrows():
+        username = str(row.get(username_key, "")).strip()
+        password = str(row.get(password_key, "")).strip()
+        if not username:
+            continue
+        proxy_host = str(row.get(columns.get("proxy", ""), "")).strip()
+        proxy_port = str(row.get(columns.get("port", ""), "")).strip()
+        proxy_scheme = str(row.get(columns.get("proxy scheme", ""), "") or "http").strip()
+        proxy_username = str(row.get(columns.get("proxy username", ""), "")).strip()
+        proxy_password = str(row.get(columns.get("proxy password", ""), "")).strip()
+
+        records.append(
+            {
+                "id": username,
+                "username": username,
+                "password": password,
+                "proxy": proxy_host,
+                "proxy_port": proxy_port,
+                "proxy_scheme": proxy_scheme,
+                "proxy_username": proxy_username,
+                "proxy_password": proxy_password,
+            }
+        )
+    return records
+
+
 def _locate_local_driver():
     candidates = [
         os.environ.get("CHROMEDRIVER"),
@@ -345,14 +423,54 @@ def _locate_local_driver():
     return None
 
 
-def _build_driver(incognito: bool = False, headless: bool = False):
+def _proxy_to_seleniumwire_options(proxy: dict | None) -> dict | None:
+    if not proxy:
+        return None
+    host = str(
+        proxy.get("proxy")
+        or proxy.get("host")
+        or proxy.get("proxy_host")
+        or proxy.get("ip")
+        or ""
+    ).strip()
+    port = str(proxy.get("port") or proxy.get("proxy_port") or "").strip()
+    if not host or not port:
+        return None
+    scheme = str(proxy.get("scheme") or proxy.get("proxy_scheme") or "http").strip().lower()
+    scheme = scheme.rstrip(":/")
+    username = str(proxy.get("username") or proxy.get("proxy_username") or "").strip()
+    password = str(proxy.get("password") or proxy.get("proxy_password") or "").strip()
+    auth = f"{username}:{password}@" if username else ""
+    address = f"{scheme}://{auth}{host}:{port}"
+    return {
+        "proxy": {
+            "http": address,
+            "https": address,
+            "no_proxy": "localhost,127.0.0.1",
+        }
+    }
+
+
+def _build_driver(incognito: bool = False, headless: bool = False, proxy: dict | None = None):
     try:
-        from selenium import webdriver
+        from selenium import webdriver as selenium_webdriver
         from selenium.common.exceptions import WebDriverException
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
     except ImportError as exc:  # pragma: no cover - surfaced to UI
         raise RuntimeError("Selenium is required. Install via 'pip install selenium'.") from exc
+
+    seleniumwire_options = _proxy_to_seleniumwire_options(proxy)
+    if seleniumwire_options:
+        try:
+            from seleniumwire import webdriver as wire_webdriver  # type: ignore
+        except ImportError as exc:  # pragma: no cover - surfaced to UI
+            raise RuntimeError(
+                "Selenium Wire is required for proxy-enabled sessions. Install via 'pip install selenium-wire'."
+            ) from exc
+        driver_backend = wire_webdriver
+    else:
+        driver_backend = selenium_webdriver
 
     options = Options()
     viewport = f"--window-size={DEFAULT_WINDOW_SIZE[0]},{DEFAULT_WINDOW_SIZE[1]}"
@@ -383,7 +501,11 @@ def _build_driver(incognito: bool = False, headless: bool = False):
     local_driver = _locate_local_driver()
     if local_driver:
         try:
-            browser = webdriver.Chrome(service=Service(executable_path=str(local_driver)), options=options)
+            browser = driver_backend.Chrome(
+                service=Service(executable_path=str(local_driver)),
+                options=options,
+                **({"seleniumwire_options": seleniumwire_options} if seleniumwire_options else {}),
+            )
         except WebDriverException as nested_exc:
             raise RuntimeError(
                 "ChromeDriver was found locally but could not be started. "
@@ -393,7 +515,10 @@ def _build_driver(incognito: bool = False, headless: bool = False):
         return browser
 
     try:
-        browser = webdriver.Chrome(options=options)
+        browser = driver_backend.Chrome(
+            options=options,
+            **({"seleniumwire_options": seleniumwire_options} if seleniumwire_options else {}),
+        )
         _apply_window_bounds(browser)
         return browser
     except WebDriverException as exc:  # pragma: no cover
@@ -899,7 +1024,15 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
         local_errors: list[str] = []
         try:
             # create a fresh browser per credential so existing joined classes stay open
-            driver = _build_driver(incognito=False, headless=False)
+            proxy_cfg = {
+                "proxy": cred.get("proxy"),
+                "proxy_host": cred.get("proxy"),
+                "proxy_port": cred.get("proxy_port") or cred.get("port"),
+                "proxy_scheme": cred.get("proxy_scheme"),
+                "proxy_username": cred.get("proxy_username"),
+                "proxy_password": cred.get("proxy_password"),
+            }
+            driver = _build_driver(incognito=False, headless=False, proxy=proxy_cfg)
             wait = WebDriverWait(driver, 25)
             with active_lock:
                 ACTIVE_DRIVERS.append({"driver": driver, "wait": wait})
