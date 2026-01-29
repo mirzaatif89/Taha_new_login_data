@@ -1,0 +1,1 @@
+python.exe -m PyInstaller --noconfirm --distpath dist-new --workpath build-new TAHA_College_Detail_Bot.spec
