@@ -470,26 +470,17 @@ def _build_driver(
     proxy_scheme: Optional[str] = None,
 ):
     try:
-        from selenium import webdriver
+        from seleniumwire import webdriver as wire_webdriver  # type: ignore
+    except ImportError:
+        wire_webdriver = None
+
+    try:
+        from selenium import webdriver as selenium_webdriver
         from selenium.common.exceptions import WebDriverException
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
     except ImportError as exc:  # pragma: no cover - surfaced to UI
         raise RuntimeError("Selenium is required. Install via 'pip install selenium'.") from exc
-
-    wire_webdriver = None
-    auth_requested = bool(proxy and proxy_auth and proxy_auth[0])
-    if auth_requested:
-        try:
-            from seleniumwire import webdriver as wire_webdriver  # type: ignore
-        except Exception:
-            wire_webdriver = None
-        # For SOCKS proxies we really need selenium-wire; for HTTP we can still try user:pass in flag.
-        if wire_webdriver is None and str(proxy_scheme or "").lower().startswith("socks"):
-            raise RuntimeError(
-                "SOCKS proxy authentication needs selenium-wire. Install it with "
-                "'pip install -r Taha_new_login_data/requirements.txt' and try again."
-            )
 
     options = Options()
     viewport = f"--window-size={DEFAULT_WINDOW_SIZE[0]},{DEFAULT_WINDOW_SIZE[1]}"
@@ -517,8 +508,8 @@ def _build_driver(
     if incognito:
         options.add_argument("--incognito")
     # Build normalized proxy urls/flags
-    proxy_flag = proxy
     scheme_pref = (proxy_scheme or "").lower().strip()
+
     def with_scheme(val: str, scheme_hint: str) -> str:
         if val.startswith(("http://", "https://", "socks5://", "socks4://")):
             return val
@@ -528,65 +519,54 @@ def _build_driver(
             return f"socks5://{val}"
         return f"http://{val}"
 
-    use_wire = auth_requested and wire_webdriver is not None
+    proxy_url = ""
+    if proxy:
+        proxy_url = with_scheme(proxy, scheme_pref)
+        if proxy_auth and "://" in proxy_url:
+            user, pw = proxy_auth
+            scheme, rest = proxy_url.split("://", 1)
+            proxy_url = f"{scheme}://{user}:{pw or ''}@{rest}"
 
-    if proxy and not use_wire:
-        proxy_flag = with_scheme(proxy, scheme_pref)
-        # For SOCKS proxies, Chrome does not support creds in the flag. Leave auth to selenium-wire only.
-        if auth_requested and not proxy_flag.startswith(("socks5://", "socks4://")):
-            user, pw = proxy_auth or ("", "")
-            scheme, rest = proxy_flag.split("://", 1)
-            proxy_flag = f"{scheme}://{user}:{pw or ''}@{rest}"
-        options.add_argument(f"--proxy-server={proxy_flag}")
-
-    def start_browser(using_wire: bool):
-        local_driver = _locate_local_driver()
-        chrome_cls = wire_webdriver.Chrome if using_wire else webdriver.Chrome
-        service = Service(executable_path=str(local_driver)) if local_driver else None
-
-        if using_wire:
-            user, pw = proxy_auth or ("", "")
-            proxy_url = proxy or ""
-            if proxy_url:
-                proxy_url = with_scheme(proxy_url, scheme_pref)
-                if user and "://" in proxy_url:
-                    scheme, rest = proxy_url.split("://", 1)
-                    proxy_url = f"{scheme}://{user}:{pw or ''}@{rest}"
-            sw_options = {
-                "proxy": {
-                    "http": proxy_url,
-                    "https": proxy_url,
-                    "no_proxy": "localhost,127.0.0.1",
-                }
+    sw_options = None
+    if proxy_url:
+        sw_options = {
+            "proxy": {
+                "http": proxy_url,
+                "https": proxy_url,
+                "no_proxy": "localhost,127.0.0.1",
             }
-            if service:
-                return chrome_cls(service=service, options=options, seleniumwire_options=sw_options)
-            return chrome_cls(options=options, seleniumwire_options=sw_options)
+        }
 
+    def start_browser():
+        local_driver = _locate_local_driver()
+        service = Service(executable_path=str(local_driver)) if local_driver else None
+        kwargs = {"options": options}
+        if sw_options and wire_webdriver:
+            kwargs["seleniumwire_options"] = sw_options
+            backend = wire_webdriver
+        else:
+            backend = selenium_webdriver
+            if proxy_url and not proxy_url.startswith(("socks5://", "socks4://")):
+                options.add_argument(f"--proxy-server={proxy_url}")
         if service:
-            return chrome_cls(service=service, options=options)
-        return chrome_cls(options=options)
+            kwargs["service"] = service
+        return backend.Chrome(**kwargs)
 
     try:
-        # Try selenium-wire when auth is present
-        if use_wire:
-            browser = start_browser(using_wire=True)
-        else:
-            browser = start_browser(using_wire=False)
+        browser = start_browser()
         _apply_window_bounds(browser)
         return browser
     except Exception as exc:
-        # fallback to plain selenium if wire fails or missing
-        try:
-            browser = start_browser(using_wire=False)
-            _apply_window_bounds(browser)
-            return browser
-        except Exception as nested:
+        if proxy_url and not wire_webdriver:
             raise RuntimeError(
-                "Unable to launch ChromeDriver automatically. Install Google Chrome, ensure Selenium Manager "
-                "dependencies (including PowerShell) are available, or place chromedriver.exe in the 'drivers' "
-                f"folder (or set CHROMEDRIVER env). Original error: {nested}"
-            ) from nested
+                "Selenium Wire is missing for proxy use. Install via 'pip install selenium-wire' "
+                "or place chromedriver in 'drivers' and run again. Original error: %s" % exc
+            ) from exc
+        raise RuntimeError(
+            "Unable to launch ChromeDriver automatically. Install Google Chrome, ensure Selenium Manager "
+            "dependencies (including PowerShell) are available, or place chromedriver.exe in the 'drivers' "
+            f"folder (or set CHROMEDRIVER env). Original error: {exc}"
+        ) from exc
 
 
 def _apply_window_bounds(driver):
