@@ -39,6 +39,7 @@ DRIVER_DIR = RESOURCE_DIR / "drivers"
 USER_DRIVER_DIR = APP_DATA_DIR / "drivers"
 KEEP_BROWSER_OPEN = True
 ACTIVE_DRIVERS: list[dict] = []
+PLAYWRIGHT_SESSIONS: list[dict] = []
 DATA_DIR = APP_DATA_DIR / "data"
 TEMPLATES_DIR = APP_DATA_DIR / "templates"
 CURRENT_PORTAL = "connect"
@@ -591,6 +592,114 @@ def _close_active_drivers():
     ACTIVE_DRIVERS = []
 
 
+def _close_playwright_sessions():
+    """Close Playwright browser sessions created for login automation."""
+    global PLAYWRIGHT_SESSIONS
+    for ctx in PLAYWRIGHT_SESSIONS:
+        _close_playwright_session(ctx)
+    PLAYWRIGHT_SESSIONS = []
+
+
+def _format_proxy_url(proxy: str, scheme: str = "", username: str = "", password: str = "") -> tuple[str, Optional[dict]]:
+    """
+    Normalize proxy strings for Playwright/Selenium.
+    Returns (server, playwright_proxy_dict_or_none).
+    """
+    proxy = (proxy or "").strip()
+    scheme = (scheme or "").strip().lower()
+    if not proxy:
+        return "", None
+
+    if proxy.startswith(("http://", "https://", "socks5://", "socks4://")):
+        server = proxy
+    elif scheme:
+        server = f"{scheme}://{proxy}"
+    elif proxy.endswith((":1080", ":1086")):
+        server = f"socks5://{proxy}"
+    else:
+        server = f"http://{proxy}"
+
+    proxy_dict = {"server": server}
+    if username:
+        proxy_dict["username"] = username
+        proxy_dict["password"] = password or ""
+    return server, proxy_dict
+
+
+def _build_playwright_session(
+    login_url: str,
+    incognito: bool = False,
+    headless: bool = False,
+    proxy: Optional[str] = None,
+    proxy_auth: Optional[Tuple[str, str]] = None,
+    proxy_scheme: Optional[str] = None,
+):
+    """
+    Launch a Playwright Chromium page configured for the TAHA login flow.
+    """
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError  # type: ignore
+    except ImportError as exc:  # pragma: no cover - surfaced via UI
+        raise RuntimeError(
+            "Playwright is required. Install via 'pip install playwright' then run 'playwright install chromium'."
+        ) from exc
+
+    user = proxy_auth[0] if proxy_auth else ""
+    password = proxy_auth[1] if proxy_auth else ""
+    server, proxy_dict = _format_proxy_url(proxy or "", proxy_scheme or "", user, password)
+
+    pw = sync_playwright().start()
+    launch_kwargs = {
+        "headless": headless,
+        "args": [
+            f"--window-size={DEFAULT_WINDOW_SIZE[0]},{DEFAULT_WINDOW_SIZE[1]}",
+            "--disable-notifications",
+            "--disable-extensions",
+            "--disable-popup-blocking",
+        ],
+    }
+    if proxy_dict:
+        launch_kwargs["proxy"] = proxy_dict
+    browser = pw.chromium.launch(**launch_kwargs)
+
+    context_kwargs = {
+        "viewport": {"width": DEFAULT_WINDOW_SIZE[0], "height": DEFAULT_WINDOW_SIZE[1]},
+        "ignore_https_errors": True,
+    }
+    context = browser.new_context(**context_kwargs)
+    page = context.new_page()
+    page.set_default_timeout(20000)
+    page.goto(login_url, wait_until="domcontentloaded")
+
+    proxy_key = (
+        proxy or "",
+        proxy_scheme or "",
+        user,
+        password,
+    )
+    return {
+        "playwright": pw,
+        "browser": browser,
+        "context": context,
+        "page": page,
+        "proxy_key": proxy_key,
+    }
+
+
+def _close_playwright_session(ctx: dict):
+    """Gracefully close Playwright handles."""
+    if not ctx:
+        return
+    with suppress(Exception):
+        ctx.get("page", None) and ctx["page"].close()
+    with suppress(Exception):
+        ctx.get("context", None) and ctx["context"].close()
+    with suppress(Exception):
+        ctx.get("browser", None) and ctx["browser"].close()
+    with suppress(Exception):
+        ctx.get("playwright", None) and ctx["playwright"].stop()
+
+
 def close_zoom_sessions() -> dict:
     """Close all active browser sessions opened for Zoom automation."""
     total = len(ACTIVE_DRIVERS)
@@ -608,27 +717,28 @@ def run_login_batch(
     store_results: bool = True,
 ):
     """
-    Automate the TAHA login form and feed Username/Password pairs sequentially.
+    Automate the TAHA login form with Playwright and feed Username/Password pairs sequentially.
     """
-    try:
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.support.ui import WebDriverWait
-    except ImportError as exc:  # pragma: no cover - surfaced to UI
-        raise RuntimeError("Selenium is required for automated logins. Install via 'pip install selenium'.") from exc
+    global PLAYWRIGHT_SESSIONS
 
-    username_selector = (By.ID, "emailForm")
-    password_selector = (By.ID, "pwdform")
-    submit_selector = (By.CSS_SELECTOR, "button[type='submit']")
-    attendance_selector = (By.XPATH, '//*[@id="navbar-navlist"]/li[4]/a')
-    attendance_row_selector = (By.XPATH, "/html/body/section[2]/div/div[2]/div/div/table/tbody/tr[1]")
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError  # type: ignore
+    except ImportError as exc:  # pragma: no cover - surfaced to UI
+        raise RuntimeError(
+            "Playwright is required for automated logins. Install via 'pip install playwright' then run 'playwright install chromium'."
+        ) from exc
+
+    username_selector = "css=#emailForm"
+    password_selector = "css=#pwdform"
+    submit_selector = "css=button[type='submit']"
+    attendance_selector = "xpath=//*[@id='navbar-navlist']/li[4]/a"
+    attendance_row_selector = "xpath=/html/body/section[2]/div/div[2]/div/div/table/tbody/tr[1]"
     capture_attendance = mode != "login"
 
     start = perf_counter()
     results = []
     browser_error = ""
-    drivers: list[dict] = []
+    sessions: list[dict] = []
     default_proxy_user, default_proxy_pass = get_proxy_auth()
 
     def _proxy_config(row: dict) -> Tuple[str, str, Optional[Tuple[str, str]], tuple]:
@@ -642,53 +752,42 @@ def run_login_batch(
         key = (proxy_raw, proxy_scheme, auth_user, auth_pass)
         return proxy_raw, proxy_scheme, proxy_auth, key
 
-    def _new_driver(proxy_raw: str = "", proxy_scheme: str = "", proxy_auth=None):
-        browser = _build_driver(
+    def _new_session(proxy_raw: str = "", proxy_scheme: str = "", proxy_auth=None):
+        return _build_playwright_session(
+            login_url=login_url,
             incognito=incognito,
             headless=headless,
             proxy=proxy_raw or None,
             proxy_auth=proxy_auth,
             proxy_scheme=proxy_scheme or None,
         )
-        wait_obj = WebDriverWait(browser, 20)
-        browser.get(login_url)
-        time.sleep(2)
-        proxy_key = (
-            proxy_raw or "",
-            proxy_scheme or "",
-            proxy_auth[0] if proxy_auth else "",
-            proxy_auth[1] if proxy_auth else "",
-        )
-        return {"driver": browser, "wait": wait_obj, "proxy_key": proxy_key}
 
     try:
-        _close_active_drivers()
+        _close_active_drivers()  # clear any Selenium leftovers
+        _close_playwright_sessions()  # clear prior Playwright runs
         total_credentials = len(credentials)
         pool_size = max(1, min(concurrency or 1, total_credentials))
         for idx in range(pool_size):
             cred = credentials[idx % total_credentials]
             proxy_raw, proxy_scheme, proxy_auth, _ = _proxy_config(cred)
-            drivers.append(_new_driver(proxy_raw, proxy_scheme, proxy_auth))
-        ACTIVE_DRIVERS = drivers
+            sessions.append(_new_session(proxy_raw, proxy_scheme, proxy_auth))
 
-        if not drivers:
+        if not sessions:
             raise RuntimeError("Unable to launch any browser instances.")
 
-        for index, item in enumerate(credentials, 1):
-            driver_idx = (index - 1) % len(drivers)
-            proxy_raw, proxy_scheme, proxy_auth, proxy_key = _proxy_config(item)
-            ctx = drivers[driver_idx]
-            if ctx.get("proxy_key") != proxy_key:
-                try:
-                    if ctx.get("driver"):
-                        ctx["driver"].quit()
-                except Exception:
-                    pass
-                ctx = _new_driver(proxy_raw, proxy_scheme, proxy_auth)
-                drivers[driver_idx] = ctx
-            browser = ctx["driver"]
-            wait = ctx["wait"]
+        # keep sessions alive after function returns (prevents auto-close)
+        PLAYWRIGHT_SESSIONS = sessions
 
+        for index, item in enumerate(credentials, 1):
+            driver_idx = (index - 1) % len(sessions)
+            proxy_raw, proxy_scheme, proxy_auth, proxy_key = _proxy_config(item)
+            ctx = sessions[driver_idx]
+            if ctx.get("proxy_key") != proxy_key:
+                _close_playwright_session(ctx)
+                ctx = _new_session(proxy_raw, proxy_scheme, proxy_auth)
+                sessions[driver_idx] = ctx
+
+            page = ctx["page"]
             username_value = (item.get("username") or item.get("id") or "").strip()
             password_value = str(item.get("password", "")).strip()
             if not username_value:
@@ -706,42 +805,34 @@ def run_login_batch(
             while attempt < 2:
                 attempt += 1
                 try:
-                    username_input = wait.until(EC.presence_of_element_located(username_selector))
-                    password_input = wait.until(EC.presence_of_element_located(password_selector))
-                    submit_btn = wait.until(EC.element_to_be_clickable(submit_selector))
+                    page.goto(login_url, wait_until="domcontentloaded")
+                    page.wait_for_selector(username_selector, state="visible", timeout=20000)
+                    page.wait_for_selector(password_selector, state="visible", timeout=20000)
 
-                    username_input.clear()
-                    username_input.send_keys(username_value)
-                    password_input.clear()
-                    password_input.send_keys(password_value)
-                    password_input.send_keys(Keys.TAB)
-                    time.sleep(0.5)
-                    try:
-                        browser.execute_script(
-                            "arguments[0].scrollIntoView({behavior:'smooth', block:'center'});",
-                            submit_btn,
-                        )
-                    except Exception:
-                        pass
-                    submit_btn.click()
-                    time.sleep(2.5)
+                    page.fill(username_selector, username_value)
+                    page.fill(password_selector, password_value)
+                    page.press(password_selector, "Tab")
+                    page.wait_for_timeout(500)
+                    page.click(submit_selector)
+                    page.wait_for_timeout(2500)
 
                     login_status = "Success"
                     login_detail = "Credentials submitted to TAHA portal."
 
                     for selector in [
-                        "//*[contains(@class,'alert') and contains(@class,'alert-danger')]",
-                        "//*[contains(@class,'alert') and contains(@class,'alert-error')]",
-                        "//div[@role='alert']",
-                        "//span[contains(@class,'error')]",
+                        "xpath=//*[contains(@class,'alert') and contains(@class,'alert-danger')]",
+                        "xpath=//*[contains(@class,'alert') and contains(@class,'alert-error')]",
+                        "xpath=//div[@role='alert']",
+                        "xpath=//span[contains(@class,'error')]",
                     ]:
                         try:
-                            alert_element = browser.find_element(By.XPATH, selector)
-                            alert_text = alert_element.text.strip()
+                            alert_text = page.locator(selector).first.inner_text(timeout=1500).strip()
                             if alert_text:
                                 login_status = "Failed"
                                 login_detail = alert_text
                                 break
+                        except PlaywrightTimeoutError:
+                            continue
                         except Exception:
                             continue
 
@@ -750,25 +841,15 @@ def run_login_batch(
 
                     if capture_attendance and login_status == "Success":
                         try:
-                            attendance_link = wait.until(EC.element_to_be_clickable(attendance_selector))
-                            try:
-                                browser.execute_script(
-                                    "arguments[0].scrollIntoView({behavior:'smooth', block:'center'});",
-                                    attendance_link,
-                                )
-                            except Exception:
-                                pass
-                            attendance_link.click()
-                            time.sleep(1.2)
-                            row_element = wait.until(EC.presence_of_element_located(attendance_row_selector))
-                            cells = row_element.find_elements(By.TAG_NAME, "td")
-                            if not cells:
-                                cells = row_element.find_elements(By.XPATH, "./*")
+                            page.click(attendance_selector, timeout=15000)
+                            row_element = page.wait_for_selector(attendance_row_selector, timeout=20000)
+                            cells = row_element.locator("xpath=./*")
 
                             def cell_text(idx: int) -> str:
-                                if idx < len(cells):
-                                    return cells[idx].text.strip()
-                                return ""
+                                try:
+                                    return cells.nth(idx).inner_text(timeout=2000).strip()
+                                except PlaywrightError:
+                                    return ""
 
                             attendance_data = {
                                 "month": cell_text(1),
@@ -793,21 +874,15 @@ def run_login_batch(
                         }
                     )
                     break
-                except Exception as exc:  # pragma: no cover - automation issues
+                except (PlaywrightTimeoutError, PlaywrightError, Exception) as exc:  # pragma: no cover - automation issues
                     msg = str(exc)
-                    if "invalid session id" in msg.lower() and attempt == 1:
-                        try:
-                            if ctx.get("driver"):
-                                try:
-                                    ctx["driver"].quit()
-                                except Exception:
-                                    pass
-                        finally:
-                            drivers[driver_idx] = ctx = _new_driver(proxy_raw, proxy_scheme, proxy_auth)
-                            browser = ctx["driver"]
-                            wait = ctx["wait"]
-                        continue  # retry this credential once with fresh session
                     browser_error = msg
+                    if attempt == 1:
+                        _close_playwright_session(ctx)
+                        ctx = _new_session(proxy_raw, proxy_scheme, proxy_auth)
+                        sessions[driver_idx] = ctx
+                        page = ctx["page"]
+                        continue  # retry this credential once with fresh session
                     results.append(
                         {
                             "id": username_value or f"Row {index}",
@@ -817,22 +892,11 @@ def run_login_batch(
                         }
                     )
                     break
-
-            if index + len(drivers) <= total_credentials:
-                try:
-                    browser.get(login_url)
-                    time.sleep(1.5)
-                except Exception as exc:
-                    if "invalid session id" in str(exc).lower():
-                        drivers[driver_idx] = ctx = _new_driver(proxy_raw, proxy_scheme, proxy_auth)
-                        browser = ctx["driver"]
-                        wait = ctx["wait"]
-                        time.sleep(1.0)
     except Exception as exc:
         browser_error = str(exc)
     finally:
         if not KEEP_BROWSER_OPEN:
-            _close_active_drivers()
+            _close_playwright_sessions()
 
     elapsed = perf_counter() - start
     if store_results:
