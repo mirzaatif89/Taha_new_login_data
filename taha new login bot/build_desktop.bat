@@ -7,13 +7,11 @@ cd /d "%~dp0"
 set APP_NAME=TAHA_College_Detail_Bot
 set MAIN_SCRIPT=taha_college_detail.py
 
-:: Prefer the project's venv if it exists; fall back to system Python
-set "VENV_DIR=%~dp0..\\venv"
-if exist "%VENV_DIR%\\Scripts\\python.exe" (
-    set "PYTHON=%VENV_DIR%\\Scripts\\python.exe"
-) else (
-    set "PYTHON=python"
-)
+:: Prefer the project's .venv if it exists; fall back to sibling venv or system Python
+set "PYTHON="
+if exist "%~dp0..\\.venv\\Scripts\\python.exe" set "PYTHON=%~dp0..\\.venv\\Scripts\\python.exe"
+if not defined PYTHON if exist "%~dp0..\\venv\\Scripts\\python.exe" set "PYTHON=%~dp0..\\venv\\Scripts\\python.exe"
+if not defined PYTHON set "PYTHON=python"
 
 "%PYTHON%" -m pip install --upgrade pip
 "%PYTHON%" -m pip install -r requirements.txt

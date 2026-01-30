@@ -541,13 +541,16 @@ def _build_driver(
         local_driver = _locate_local_driver()
         service = Service(executable_path=str(local_driver)) if local_driver else None
         kwargs = {"options": options}
-        if sw_options and wire_webdriver:
+        if sw_options:
+            if not wire_webdriver:
+                raise RuntimeError(
+                    "Proxy settings supplied but 'selenium-wire' is not installed. "
+                    "Install it with 'pip install selenium-wire' to continue."
+                )
             kwargs["seleniumwire_options"] = sw_options
             backend = wire_webdriver
         else:
             backend = selenium_webdriver
-            if proxy_url and not proxy_url.startswith(("socks5://", "socks4://")):
-                options.add_argument(f"--proxy-server={proxy_url}")
         if service:
             kwargs["service"] = service
         return backend.Chrome(**kwargs)
@@ -626,20 +629,46 @@ def run_login_batch(
     results = []
     browser_error = ""
     drivers: list[dict] = []
+    default_proxy_user, default_proxy_pass = get_proxy_auth()
 
-    def _new_driver():
-        browser = _build_driver(incognito=incognito, headless=headless)
+    def _proxy_config(row: dict) -> Tuple[str, str, Optional[Tuple[str, str]], tuple]:
+        proxy_raw = str(row.get("proxy") or "").strip()
+        proxy_scheme = str(row.get("proxy_scheme") or "").strip()
+        row_user = str(row.get("proxy_username") or "").strip()
+        row_pass = str(row.get("proxy_password") or "").strip()
+        auth_user = row_user or default_proxy_user or ""
+        auth_pass = row_pass or default_proxy_pass or ""
+        proxy_auth = (auth_user, auth_pass) if auth_user else None
+        key = (proxy_raw, proxy_scheme, auth_user, auth_pass)
+        return proxy_raw, proxy_scheme, proxy_auth, key
+
+    def _new_driver(proxy_raw: str = "", proxy_scheme: str = "", proxy_auth=None):
+        browser = _build_driver(
+            incognito=incognito,
+            headless=headless,
+            proxy=proxy_raw or None,
+            proxy_auth=proxy_auth,
+            proxy_scheme=proxy_scheme or None,
+        )
         wait_obj = WebDriverWait(browser, 20)
         browser.get(login_url)
         time.sleep(2)
-        return {"driver": browser, "wait": wait_obj}
+        proxy_key = (
+            proxy_raw or "",
+            proxy_scheme or "",
+            proxy_auth[0] if proxy_auth else "",
+            proxy_auth[1] if proxy_auth else "",
+        )
+        return {"driver": browser, "wait": wait_obj, "proxy_key": proxy_key}
 
     try:
         _close_active_drivers()
         total_credentials = len(credentials)
         pool_size = max(1, min(concurrency or 1, total_credentials))
-        for _ in range(pool_size):
-            drivers.append(_new_driver())
+        for idx in range(pool_size):
+            cred = credentials[idx % total_credentials]
+            proxy_raw, proxy_scheme, proxy_auth, _ = _proxy_config(cred)
+            drivers.append(_new_driver(proxy_raw, proxy_scheme, proxy_auth))
         ACTIVE_DRIVERS = drivers
 
         if not drivers:
@@ -647,7 +676,16 @@ def run_login_batch(
 
         for index, item in enumerate(credentials, 1):
             driver_idx = (index - 1) % len(drivers)
+            proxy_raw, proxy_scheme, proxy_auth, proxy_key = _proxy_config(item)
             ctx = drivers[driver_idx]
+            if ctx.get("proxy_key") != proxy_key:
+                try:
+                    if ctx.get("driver"):
+                        ctx["driver"].quit()
+                except Exception:
+                    pass
+                ctx = _new_driver(proxy_raw, proxy_scheme, proxy_auth)
+                drivers[driver_idx] = ctx
             browser = ctx["driver"]
             wait = ctx["wait"]
 
@@ -765,7 +803,7 @@ def run_login_batch(
                                 except Exception:
                                     pass
                         finally:
-                            drivers[driver_idx] = ctx = _new_driver()
+                            drivers[driver_idx] = ctx = _new_driver(proxy_raw, proxy_scheme, proxy_auth)
                             browser = ctx["driver"]
                             wait = ctx["wait"]
                         continue  # retry this credential once with fresh session
@@ -786,7 +824,7 @@ def run_login_batch(
                     time.sleep(1.5)
                 except Exception as exc:
                     if "invalid session id" in str(exc).lower():
-                        drivers[driver_idx] = ctx = _new_driver()
+                        drivers[driver_idx] = ctx = _new_driver(proxy_raw, proxy_scheme, proxy_auth)
                         browser = ctx["driver"]
                         wait = ctx["wait"]
                         time.sleep(1.0)

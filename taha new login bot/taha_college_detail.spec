@@ -1,12 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+import sys
 
+BASE_DIR = Path(sys.argv[0]).resolve().parent
+
+datas = [
+    (str(BASE_DIR / "web"), "web"),
+    (str(BASE_DIR / "templates"), "templates"),
+    (str(BASE_DIR / "drivers"), "drivers"),
+    (str(BASE_DIR / "data"), "data"),
+]
 
 a = Analysis(
     ['taha_college_detail.py'],
-    pathex=[],
+    pathex=[str(BASE_DIR)],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=datas,
+    hiddenimports=['seleniumwire'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
