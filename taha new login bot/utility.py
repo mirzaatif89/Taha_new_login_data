@@ -491,10 +491,15 @@ def _build_driver(
     else:
         options.add_argument(viewport)
         options.add_argument(f"--window-position={DEFAULT_WINDOW_POS[0]},{DEFAULT_WINDOW_POS[1]}")
+        options.add_argument("--start-maximized")
+    options.add_experimental_option("detach", True)
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
     options.add_argument("--disable-notifications")
     options.add_argument("--disable-geolocation")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-extensions")
+    options.add_argument("--ignore-certificate-errors")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_argument("--use-fake-ui-for-media-stream")
     options.add_argument("--use-fake-device-for-media-stream")
@@ -508,6 +513,7 @@ def _build_driver(
     options.add_experimental_option("prefs", prefs)
     if incognito:
         options.add_argument("--incognito")
+
     # Build normalized proxy urls/flags
     scheme_pref = (proxy_scheme or "").lower().strip()
 
@@ -535,42 +541,45 @@ def _build_driver(
                 "http": proxy_url,
                 "https": proxy_url,
                 "no_proxy": "localhost,127.0.0.1",
-            }
+            },
+            "verify_ssl": False,  
         }
 
-    def start_browser():
+    def start_browser(use_wire: bool = True):
         local_driver = _locate_local_driver()
         service = Service(executable_path=str(local_driver)) if local_driver else None
         kwargs = {"options": options}
-        if sw_options:
-            if not wire_webdriver:
-                raise RuntimeError(
-                    "Proxy settings supplied but 'selenium-wire' is not installed. "
-                    "Install it with 'pip install selenium-wire' to continue."
-                )
+
+        if use_wire and sw_options and wire_webdriver:
             kwargs["seleniumwire_options"] = sw_options
             backend = wire_webdriver
         else:
-            backend = selenium_webdriver
+            if sw_options:
+                proxy_arg = sw_options["proxy"]["http"]
+                options.add_argument(f"--proxy-server={proxy_arg}")
+            backend = selenium_webdriver if selenium_webdriver else wire_webdriver
+
         if service:
             kwargs["service"] = service
         return backend.Chrome(**kwargs)
 
-    try:
-        browser = start_browser()
-        _apply_window_bounds(browser)
-        return browser
-    except Exception as exc:
-        if proxy_url and not wire_webdriver:
-            raise RuntimeError(
-                "Selenium Wire is missing for proxy use. Install via 'pip install selenium-wire' "
-                "or place chromedriver in 'drivers' and run again. Original error: %s" % exc
-            ) from exc
-        raise RuntimeError(
-            "Unable to launch ChromeDriver automatically. Install Google Chrome, ensure Selenium Manager "
-            "dependencies (including PowerShell) are available, or place chromedriver.exe in the 'drivers' "
-            f"folder (or set CHROMEDRIVER env). Original error: {exc}"
-        ) from exc
+    last_error = None
+    for attempt in ("wire", "plain"):
+        try:
+            browser = start_browser(use_wire=(attempt == "wire"))
+            _apply_window_bounds(browser)
+            return browser
+        except Exception as exc:
+            last_error = exc
+            if attempt == "wire" and sw_options:
+                # mitmproxy often fails to bind ports on restricted machines; fall back to plain Selenium.
+                continue
+            break
+
+    raise RuntimeError(
+        "Unable to launch ChromeDriver. Ensure Chrome is installed or place chromedriver in 'drivers'. "
+        f"Original error: {last_error}"
+    ) from last_error
 
 
 def _apply_window_bounds(driver):
@@ -911,13 +920,95 @@ def run_login_batch(
         "browser_error": browser_error,
     }
 
+def click_join_from_browser(driver, timeout=15) -> bool:
+    """Click the landing-page 'Join from browser' / 'Join from your browser' CTA."""
+    try:
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+    except Exception:
+        return False
+
+    end_time = time.time() + timeout
+    locators = [
+        (By.ID, "btnOpenInBrowser"),
+        (By.ID, "wc-container-join-from-browser"),
+        (By.CSS_SELECTOR, "#btnOpenInBrowser,#wc-container-join-from-browser"),
+        (By.XPATH, "//button[contains(., 'Join from browser')]"),
+        (By.XPATH, "//button[contains(., 'Join from your browser')]"),
+        (By.XPATH, "//a[contains(., 'Join from browser')]"),
+        (By.XPATH, "//a[contains(., 'Join from your browser')]"),
+        (By.XPATH, "//span[contains(., 'Join from browser')]/ancestor::*[self::button or self::a]"),
+        (By.XPATH, "//span[contains(., 'Join from your browser')]/ancestor::*[self::button or self::a]"),
+        (By.CSS_SELECTOR, "button.joinFromBrowser, a.joinFromBrowser"),
+        # Fallback to the static position used on the current landing page
+        (By.XPATH, "/html/body/div[1]/div[2]/div/div[2]/div/div[1]/div/button[2]"),
+    ]
+    js_probe = """
+        const phrases = [
+            'join from browser',
+            'join from your browser',
+            'join from web',
+            'join from web browser'
+        ];
+        const nodes = Array.from(document.querySelectorAll('button,a,span,div'));
+        for (const node of nodes) {
+            const text = (node.innerText || node.textContent || '').trim().toLowerCase();
+            if (!text) continue;
+            if (phrases.some(p => text.includes(p))) {
+                try { node.scrollIntoView({behavior:'smooth', block:'center'}); } catch (e) {}
+                try { node.click(); } catch (e) {}
+                return true;
+            }
+        }
+        return false;
+    """
+
+    while time.time() < end_time:
+        for how, value in locators:
+            try:
+                btn = WebDriverWait(driver, 3).until(EC.element_to_be_clickable((how, value)))
+                try:
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({behavior:'smooth', block:'center'});", btn
+                    )
+                except Exception:
+                    pass
+                btn.click()
+                return True
+            except Exception:
+                continue
+        try:
+            if driver.execute_script(js_probe):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.4)
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    return False
+
 
 def click_continue_without_mic_camera(driver, timeout=20) -> bool:
     """Iterate through iframes to press any 'Continue without audio/video' control on Zoom join."""
     try:
         from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.common.exceptions import TimeoutException
     except Exception:
         return False
+
+    clicked_join = False
+    # If we're still on the landing page, hit the 'Join from browser' CTA first.
+    try:
+        clicked_join = click_join_from_browser(driver, timeout=5)
+        if clicked_join:
+            time.sleep(1)
+    except Exception:
+        pass
     end_time = time.time() + timeout
     selectors = [
         ".pepc-permission-dialog__footer-button",
@@ -938,6 +1029,14 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
         r"skip.*video",
         r"not now",
     ]
+    join_from_browser_xpath = "/html/body/div[1]/div[2]/div/div[2]/div/div[1]/div/button[2]"
+    preferred_locators = [
+        (By.XPATH, "//button[contains(., 'Join from browser')]"),
+        (By.XPATH, "//a[contains(., 'Join from browser')]"),
+        (By.XPATH, "//span[contains(., 'Join from browser')]/ancestor::*[self::button or self::a]"),
+        (By.CSS_SELECTOR, "button.joinFromBrowser, a.joinFromBrowser"),
+        (By.XPATH, join_from_browser_xpath),
+    ]
     js_click = """
         const selectors = arguments[0];
         const keywords = arguments[1].map(k => new RegExp(k, 'i'));
@@ -955,7 +1054,7 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
         }
         return false;
     """
-    clicked_once = False
+    clicked_once = clicked_join
     while time.time() < end_time:
         try:
             driver.switch_to.default_content()
@@ -972,6 +1071,25 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
                 driver.switch_to.default_content()
                 if frame is not None:
                     driver.switch_to.frame(frame)
+                # Try explicit "Join from browser" locators first
+                for how, value in preferred_locators:
+                    try:
+                        btn = WebDriverWait(driver, 1).until(
+                            EC.element_to_be_clickable((how, value))
+                        )
+                        driver.execute_script(
+                            "arguments[0].scrollIntoView({behavior:'smooth', block:'center'}); arguments[0].click();",
+                            btn,
+                        )
+                        clicked_once = True
+                        clicked_this_pass = True
+                        break
+                    except TimeoutException:
+                        continue
+                    except Exception:
+                        continue
+                if clicked_this_pass:
+                    break
                 if driver.execute_script(js_click, selectors, keywords):
                     clicked_once = True
                     clicked_this_pass = True
@@ -1317,6 +1435,11 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
             if zoom_handle:
                 driver.switch_to.window(zoom_handle)
 
+            try:
+                click_join_from_browser(driver, timeout=15)
+            except Exception:
+                pass
+
             followup = None
             try:
                 followup = wait.until(EC.element_to_be_clickable((By.XPATH, followup_xpath)))
@@ -1325,12 +1448,20 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
             if followup:
                 followup.click()
             else:
-                join_link = wait.until(
-                    EC.element_to_be_clickable(
-                        (By.XPATH, "//a[contains(normalize-space(),'Join from your browser')]")
-                    )
-                )
-                join_link.click()
+                join_candidates = [
+                    (By.XPATH, "//button[contains(., 'Join from browser')]"),
+                    (By.XPATH, "//a[contains(., 'Join from browser')]"),
+                    (By.XPATH, "//button[contains(., 'Join from your browser')]"),
+                    (By.XPATH, "//a[contains(., 'Join from your browser')]"),
+                    (By.XPATH, "/html/body/div[1]/div[2]/div/div[2]/div[2]/div[1]/div/button[2]"),
+                ]
+                join_link = find_first(driver, join_candidates)
+                if join_link:
+                    try:
+                        join_link.location_once_scrolled_into_view
+                    except Exception:
+                        pass
+                    join_link.click()
 
             try:
                 click_continue_without_mic_camera(driver, timeout=20)

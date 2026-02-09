@@ -1,6 +1,4 @@
 from pathlib import Path 
-lines=Path('utility.py').read_text(errors='ignore').splitlines() 
-start=695 
-end=740 
-for i in range(start-1,end): 
-    print('%04d: '%(i+1) + lines[i]) 
+lines=Path('utility.py').read_text('utf-8').splitlines()  
+for i in range(480,520):  
+    print(str(i+1).rjust(4) + ': ' + lines[i])  
