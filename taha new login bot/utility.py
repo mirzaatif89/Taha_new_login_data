@@ -499,11 +499,17 @@ def _build_driver(
     options.add_argument("--disable-geolocation")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-extensions")
+    options.add_argument("--disable-save-password-bubble")
+    options.add_argument("--disable-translate")
     options.add_argument("--ignore-certificate-errors")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_argument("--use-fake-ui-for-media-stream")
-    options.add_argument("--use-fake-device-for-media-stream")
+    options.add_experimental_option("useAutomationExtension", False)
     prefs = {
+        # Kill Chrome UI prompts that can block automation runs.
+        "credentials_enable_service": False,
+        "profile.password_manager_enabled": False,
+        "autofill.profile_enabled": False,
+        "autofill.credit_card_enabled": False,
         "profile.default_content_setting_values.notifications": 2,
         "profile.default_content_setting_values.popups": 2,
         "profile.default_content_setting_values.geolocation": 2,
