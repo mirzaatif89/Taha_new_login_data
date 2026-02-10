@@ -17,13 +17,11 @@ from utility import (
     delete_storage_data,
     download_template,
     get_db_path,
-    get_proxy_auth,
     load_credentials_from_db,
     load_credentials,
     run_login_batch,
     run_zoom_portal,
     set_active_portal,
-    set_proxy_auth,
     reset_all_data,
     save_login_course_report,
     save_login_status_report,
@@ -46,8 +44,6 @@ class Api:
         self.upload_path = ""
         self.zoom_path = ""
         self.zoom_credentials = []
-        self.proxy_username = ""
-        self.proxy_password = ""
 
     @staticmethod
     def _read_columns(file_path: Path):
@@ -153,36 +149,22 @@ class Api:
             threads = 1
         threads = max(1, min(threads, 10))
 
-        # Preflight: verify we can launch a driver with the first credential's proxy/auth
+        # Preflight: verify we can launch a driver before starting the background thread
         try:
             from utility import _build_driver  # type: ignore
         except Exception:
             _build_driver = None
         if _build_driver:
             try:
-                proxy_raw = first.get("proxy") or ""
-                proxy_addr = proxy_raw
-                proxy_scheme = (first.get("proxy_scheme") or "").strip()
-                proxy_user = (first.get("proxy_username") or "").strip()
-                proxy_pass = (first.get("proxy_password") or "").strip()
-                # Quick reachability probe for HTTP/HTTPS proxies to surface clearer errors
-                try:
-                    from utility import _probe_proxy_http  # type: ignore
-                except Exception:
-                    _probe_proxy_http = None
-                if _probe_proxy_http and proxy_scheme in {"", "http", "https"} and proxy_addr:
-                    ok, perr = _probe_proxy_http(ZOOM_PORTAL_URL, proxy_addr, proxy_scheme or "http", proxy_user, proxy_pass)
-                    if not ok:
-                        return {"error": f"Proxy blocked or unreachable: {perr}"}
                 driver = _build_driver(
                     incognito=False,
                     headless=False,
-                    proxy=proxy_addr or None,
-                    proxy_auth=(proxy_user, proxy_pass) if proxy_user else None,
-                    proxy_scheme=proxy_scheme or None,
                 )
                 try:
+                    profile_dir = getattr(driver, "_taha_profile_dir", None)
                     driver.quit()
+                    if profile_dir:
+                        shutil.rmtree(profile_dir, ignore_errors=True)
                 except Exception:
                     pass
             except Exception as exc:
@@ -196,23 +178,11 @@ class Api:
                     target_xpath="/html/body/section[3]/div/div/div[1]/div/div[1]/div/div",
                     threads=threads,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"Zoom portal error: {exc}")
 
         threading.Thread(target=_open_and_fill, daemon=True).start()
         return {"opened": True, "error": ""}
-
-    def get_proxy_settings(self):
-        username, password = get_proxy_auth()
-        return {"username": username, "password": password}
-
-    def save_proxy_settings(self, username: str, password: str):
-        try:
-            set_proxy_auth(username or "", password or "")
-            stored_user, stored_pass = get_proxy_auth()
-            return {"saved": True, "error": "", "username": stored_user, "password": stored_pass}
-        except Exception as exc:
-            return {"saved": False, "error": str(exc)}
 
     def save_template(self):
         file_types = ("Excel Files (*.xlsx)", "All Files (*.*)")
@@ -229,11 +199,6 @@ class Api:
             columns=[
                 "Username",
                 "Password",
-                "Proxy",
-                "Port",
-                "Proxy Scheme",
-                "Proxy Username",
-                "Proxy Password",
             ],
             default_filename="login_template.xlsx",
             target_path=selected_path,

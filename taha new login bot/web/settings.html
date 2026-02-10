@@ -61,20 +61,6 @@
               </select>
             </div>
             <div class="settings-item">
-              <span>Proxy Username</span>
-              <input id="proxy-username" class="settings-control" type="text" placeholder="proxy user" />
-            </div>
-            <div class="settings-item">
-              <span>Proxy Password</span>
-              <input id="proxy-password" class="settings-control" type="password" placeholder="proxy password" />
-            </div>
-            <div class="settings-item">
-              <span>Proxy Auth</span>
-              <div class="settings-actions">
-                <button id="proxy-save-btn" class="btn primary small" type="button">Save Proxy Login</button>
-              </div>
-            </div>
-            <div class="settings-item">
               <span>Storage Delete</span>
               <button id="storage-delete-btn" class="btn ghost small" type="button">Delete</button>
             </div>
@@ -186,7 +172,6 @@
       bindApi();
       window.addEventListener("pywebviewready", () => {
         bindApi();
-        loadProxySettings();
       });
 
       async function safeCall(fn, fallbackMessage) {
@@ -216,9 +201,6 @@
       const resetStatus = document.getElementById("reset-status");
       const cacheClearBtn = document.getElementById("cache-clear-btn");
       const settingsStatus = document.getElementById("settings-status");
-      const proxyUsername = document.getElementById("proxy-username");
-      const proxyPassword = document.getElementById("proxy-password");
-      const proxySaveBtn = document.getElementById("proxy-save-btn");
       const storageCredentials = document.getElementById("storage-credentials");
       const storageLoginStatus = document.getElementById("storage-login-status");
       const storageAttendance = document.getElementById("storage-attendance");
@@ -299,68 +281,6 @@
       if (storageModalConfirm) {
         storageModalConfirm.addEventListener("click", handleStorageDelete);
       }
-
-      async function loadProxySettings(retry = 0) {
-        if (!proxyUsername || !proxyPassword || !settingsStatus) return;
-        if (!api) {
-          if (retry < 3) {
-            setTimeout(() => loadProxySettings(retry + 1), 300);
-          }
-          return;
-        }
-        try {
-          const result = await safeCall(() => api.get_proxy_settings(), "Failed to load proxy settings.");
-          proxyUsername.value = (result && result.username) || "";
-          proxyPassword.value = (result && result.password) || "";
-          if (settingsStatus && (result?.username || result?.password)) {
-            settingsStatus.textContent = "Proxy login loaded.";
-          }
-        } catch (error) {
-          settingsStatus.textContent = error.message || "Failed to load proxy settings.";
-        }
-      }
-
-      async function saveProxySettings() {
-        if (!proxyUsername || !proxyPassword || !settingsStatus) return;
-        if (!api || typeof api.save_proxy_settings !== "function") {
-          settingsStatus.textContent = "Proxy save API not available. Restart the app.";
-          return;
-        }
-        try {
-          settingsStatus.textContent = "Saving proxy login…";
-          const result = await safeCall(
-            () => api.save_proxy_settings(proxyUsername.value, proxyPassword.value),
-            "Failed to save proxy login."
-          );
-          if (result && result.error) {
-            settingsStatus.textContent = result.error;
-            return;
-          }
-          proxyUsername.value = (result && result.username) || proxyUsername.value;
-          proxyPassword.value = (result && result.password) || proxyPassword.value;
-          settingsStatus.textContent = "Proxy login saved.";
-        } catch (error) {
-          settingsStatus.textContent = error.message || "Failed to save proxy login.";
-        }
-      }
-
-      if (proxySaveBtn) {
-        proxySaveBtn.addEventListener("click", saveProxySettings);
-        loadProxySettings();
-      }
-
-      // Auto-save proxy creds on change to avoid losing them when navigating away.
-      let proxySaveTimer = null;
-      function scheduleProxySave() {
-        if (!proxyUsername || !proxyPassword) return;
-        if (proxySaveTimer) clearTimeout(proxySaveTimer);
-        proxySaveTimer = setTimeout(() => {
-          proxySaveTimer = null;
-          saveProxySettings();
-        }, 400);
-      }
-      if (proxyUsername) proxyUsername.addEventListener("input", scheduleProxySave);
-      if (proxyPassword) proxyPassword.addEventListener("input", scheduleProxySave);
 
       function openResetModal() {
         if (!resetModal) return;

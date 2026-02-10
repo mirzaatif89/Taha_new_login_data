@@ -213,12 +213,6 @@ function validateZoomThreadCount(value) {
   return parsed;
 }
 
-function normalizeProxyScheme(value) {
-  const v = String(value || "").trim().toLowerCase();
-  if (["http", "https", "socks5", "socks4"].includes(v)) return v;
-  return "";
-}
-
 async function handleLogin() {
   const source = uploadByStored && uploadByStored.checked ? "stored" : "file";
   const testingOnly = !!(testingOnlyToggle && testingOnlyToggle.checked);

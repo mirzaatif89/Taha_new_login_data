@@ -1,0 +1,11 @@
+2026/02/11-02:41:05.491 8250 Creating DB D:\Project\TahaScrapperApp\Taha_New_Login_Bot\Taha_new_login_data\taha new login bot\chrome_profiles\profile_cive4oyw\Default\Session Storage since it was missing.
+2026/02/11-02:41:05.618 8250 Reusing MANIFEST D:\Project\TahaScrapperApp\Taha_New_Login_Bot\Taha_new_login_data\taha new login bot\chrome_profiles\profile_cive4oyw\Default\Session Storage/MANIFEST-000001
+2026/02/11-02:48:10.852 8250 Level-0 table #5: started
+2026/02/11-02:48:11.620 8250 Level-0 table #5: 492003 bytes OK
+2026/02/11-02:48:11.624 8250 Delete type=0 #3
+2026/02/11-02:48:28.940 8250 Level-0 table #7: started
+2026/02/11-02:48:28.963 a804 Current memtable full; waiting...
+2026/02/11-02:48:29.190 8250 Level-0 table #7: 491030 bytes OK
+2026/02/11-02:48:29.195 8250 Delete type=0 #4
+2026/02/11-02:48:29.206 8250 Level-0 table #9: started
+2026/02/11-02:48:29.344 8250 Level-0 table #9: 246685 bytes OK

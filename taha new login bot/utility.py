@@ -4,6 +4,7 @@ import csv
 import os
 import shutil
 import sys
+import tempfile
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -47,6 +48,7 @@ LEGACY_DB_PATH = DATA_DIR / "taha_bot.db"
 DB_PATH = DATA_DIR / "taha_bot_connect.db"
 DEFAULT_WINDOW_SIZE = (1400, 900)
 DEFAULT_WINDOW_POS = (0, 0)
+CHROME_PROFILE_ROOT = APP_DATA_DIR / "chrome_profiles"
 ATTENDANCE_HEADERS = [
     "SNo.",
     "Client Email",
@@ -288,15 +290,6 @@ def get_setting(key: str) -> str:
     return row["value"] if row else ""
 
 
-def get_proxy_auth() -> Tuple[str, str]:
-    return get_setting("proxy_username"), get_setting("proxy_password")
-
-
-def set_proxy_auth(username: str, password: str):
-    set_setting("proxy_username", username or "")
-    set_setting("proxy_password", password or "")
-
-
 def _ensure_columns(conn: sqlite3.Connection, table: str, columns: list[tuple[str, str]]) -> None:
     existing = {
         row[1].lower()
@@ -333,35 +326,10 @@ def download_template(
         return {"saved": False, "path": "", "error": str(exc)}
 
 
-def _probe_proxy_http(url: str, proxy: str, scheme: str, user: str = "", password: str = "", timeout: int = 8) -> tuple[bool, str]:
-    """
-    Lightweight reachability check using requests through the provided proxy.
-    Only supports http/https proxies (not SOCKS) to avoid extra deps.
-    """
-    try:
-        import requests  # type: ignore
-    except Exception:
-        return False, "Python 'requests' not available to test proxy."
-
-    proxy_url = proxy
-    if proxy_url and not proxy_url.startswith(("http://", "https://")):
-        proxy_url = f"http://{proxy_url}"
-    if user and proxy_url:
-        proto, rest = proxy_url.split("://", 1)
-        proxy_url = f"{proto}://{user}:{password or ''}@{rest}"
-    proxies = {"http": proxy_url, "https": proxy_url}
-    try:
-        resp = requests.get(url, proxies=proxies, timeout=timeout, allow_redirects=True)
-        if resp.status_code >= 400:
-            return False, f"Proxy test HTTP {resp.status_code}"
-        return True, ""
-    except Exception as exc:
-        return False, str(exc)
-
-
 def load_credentials(file_path: Path, id_column: str, password_column: str):
     """
     Load credential rows into dictionaries with string id/password entries.
+    Extra columns are ignored.
     """
     if not file_path or not Path(file_path).is_file():
         raise FileNotFoundError(f"Template not found: {file_path}")
@@ -380,11 +348,6 @@ def load_credentials(file_path: Path, id_column: str, password_column: str):
     columns = {normalize(col): col for col in df.columns}
     id_key = columns.get(normalize(id_column))
     password_key = columns.get(normalize(password_column))
-    proxy_key = columns.get("proxy")
-    port_key = columns.get("port")
-    proxy_scheme_key = columns.get("proxy scheme") or columns.get("proxy type")
-    proxy_user_key = columns.get("proxy username") or columns.get("proxy_user") or columns.get("proxyusername")
-    proxy_pass_key = columns.get("proxy password") or columns.get("proxy_pass") or columns.get("proxypassword")
     if not id_key or not password_key:
         raise ValueError(f"Columns '{id_column}' and '{password_column}' are required.")
 
@@ -392,37 +355,14 @@ def load_credentials(file_path: Path, id_column: str, password_column: str):
     for _, row in df.iterrows():
         identifier = str(row.get(id_key, "")).strip()
         password = str(row.get(password_key, "")).strip()
-        proxy = str(row.get(proxy_key, "")).strip() if proxy_key else ""
-        port = str(row.get(port_key, "")).strip() if port_key else ""
-        proxy_user = str(row.get(proxy_user_key, "")).strip() if proxy_user_key else ""
-        proxy_pass = str(row.get(proxy_pass_key, "")).strip() if proxy_pass_key else ""
-        proxy_scheme = str(row.get(proxy_scheme_key, "")).strip().lower() if proxy_scheme_key else ""
         if not identifier:
             continue
-        proxy_addr = ""
-        if proxy and port:
-            proxy_addr = f"{proxy}:{port}"
-        elif proxy:
-            proxy_addr = proxy
-        # If scheme not provided, guess: socks if string contains 'socks', else http when auth is present
-        if not proxy_scheme:
-            raw_lower = proxy_addr.lower()
-            if "socks5" in raw_lower:
-                proxy_scheme = "socks5"
-            elif "socks4" in raw_lower:
-                proxy_scheme = "socks4"
-            elif proxy_user and proxy_addr:
-                proxy_scheme = "http"
 
         records.append(
             {
                 "id": identifier,
                 "username": identifier,
                 "password": password,
-                "proxy": proxy_addr,
-                "proxy_scheme": proxy_scheme,
-                "proxy_username": proxy_user,
-                "proxy_password": proxy_pass,
             }
         )
     return records
@@ -463,21 +403,26 @@ def _locate_local_driver():
     return None
 
 
+def _new_chrome_profile_dir() -> Path:
+    """
+    Create a unique, writable Chrome profile directory for this driver session.
+    Using a fresh profile avoids "failed to write prefs file" and profile lock errors
+    when multiple Chrome instances run concurrently.
+    """
+    try:
+        CHROME_PROFILE_ROOT.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix="profile_", dir=str(CHROME_PROFILE_ROOT)))
+    except Exception:
+        # Fall back to system temp if APP_DATA_DIR is not writable for any reason.
+        return Path(tempfile.mkdtemp(prefix="taha_profile_"))
+
+
 def _build_driver(
     incognito: bool = False,
     headless: bool = False,
-    proxy: Optional[str] = None,
-    proxy_auth: Optional[Tuple[str, str]] = None,
-    proxy_scheme: Optional[str] = None,
 ):
     try:
-        from seleniumwire import webdriver as wire_webdriver  # type: ignore
-    except ImportError:
-        wire_webdriver = None
-
-    try:
         from selenium import webdriver as selenium_webdriver
-        from selenium.common.exceptions import WebDriverException
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
     except ImportError as exc:  # pragma: no cover - surfaced to UI
@@ -488,104 +433,41 @@ def _build_driver(
     if headless:
         options.add_argument("--headless=new")
         options.add_argument(viewport)
-    else:
-        options.add_argument(viewport)
-        options.add_argument(f"--window-position={DEFAULT_WINDOW_POS[0]},{DEFAULT_WINDOW_POS[1]}")
-        options.add_argument("--start-maximized")
-    options.add_experimental_option("detach", True)
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-notifications")
-    options.add_argument("--disable-geolocation")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-site-isolation-trials")
+    options.add_argument("--autoplay-policy=no-user-gesture-required")
     options.add_argument("--disable-infobars")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-save-password-bubble")
-    options.add_argument("--disable-translate")
-    options.add_argument("--ignore-certificate-errors")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
-    prefs = {
-        # Kill Chrome UI prompts that can block automation runs.
-        "credentials_enable_service": False,
-        "profile.password_manager_enabled": False,
-        "autofill.profile_enabled": False,
-        "autofill.credit_card_enabled": False,
-        "profile.default_content_setting_values.notifications": 2,
-        "profile.default_content_setting_values.popups": 2,
-        "profile.default_content_setting_values.geolocation": 2,
-        "profile.default_content_setting_values.media_stream_mic": 2,
-        "profile.default_content_setting_values.media_stream_camera": 2,
-    }
-    options.add_experimental_option("prefs", prefs)
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("prefs", {"download_restrictions": 3}) 
     if incognito:
         options.add_argument("--incognito")
 
-    # Build normalized proxy urls/flags
-    scheme_pref = (proxy_scheme or "").lower().strip()
+    profile_dir = _new_chrome_profile_dir()
+    options.add_argument(f"--user-data-dir={profile_dir}")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
 
-    def with_scheme(val: str, scheme_hint: str) -> str:
-        if val.startswith(("http://", "https://", "socks5://", "socks4://")):
-            return val
-        if scheme_hint:
-            return f"{scheme_hint}://{val}"
-        if val.endswith((":1080", ":1086")):
-            return f"socks5://{val}"
-        return f"http://{val}"
+    local_driver = _locate_local_driver()
+    service = Service(executable_path=str(local_driver)) if local_driver else None
+    kwargs = {"options": options}
+    if service:
+        kwargs["service"] = service
+    try:
+        browser = selenium_webdriver.Chrome(**kwargs)
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to launch ChromeDriver. Ensure Chrome is installed or place chromedriver in 'drivers'. "
+            f"Original error: {exc}"
+        ) from exc
 
-    proxy_url = ""
-    if proxy:
-        proxy_url = with_scheme(proxy, scheme_pref)
-        if proxy_auth and "://" in proxy_url:
-            user, pw = proxy_auth
-            scheme, rest = proxy_url.split("://", 1)
-            proxy_url = f"{scheme}://{user}:{pw or ''}@{rest}"
+    # Track profile dir so we can clean it up when the session closes.
+    with suppress(Exception):
+        setattr(browser, "_taha_profile_dir", str(profile_dir))
 
-    sw_options = None
-    if proxy_url:
-        sw_options = {
-            "proxy": {
-                "http": proxy_url,
-                "https": proxy_url,
-                "no_proxy": "localhost,127.0.0.1",
-            },
-            "verify_ssl": False,  
-        }
-
-    def start_browser(use_wire: bool = True):
-        local_driver = _locate_local_driver()
-        service = Service(executable_path=str(local_driver)) if local_driver else None
-        kwargs = {"options": options}
-
-        if use_wire and sw_options and wire_webdriver:
-            kwargs["seleniumwire_options"] = sw_options
-            backend = wire_webdriver
-        else:
-            if sw_options:
-                proxy_arg = sw_options["proxy"]["http"]
-                options.add_argument(f"--proxy-server={proxy_arg}")
-            backend = selenium_webdriver if selenium_webdriver else wire_webdriver
-
-        if service:
-            kwargs["service"] = service
-        return backend.Chrome(**kwargs)
-
-    last_error = None
-    for attempt in ("wire", "plain"):
-        try:
-            browser = start_browser(use_wire=(attempt == "wire"))
-            _apply_window_bounds(browser)
-            return browser
-        except Exception as exc:
-            last_error = exc
-            if attempt == "wire" and sw_options:
-                # mitmproxy often fails to bind ports on restricted machines; fall back to plain Selenium.
-                continue
-            break
-
-    raise RuntimeError(
-        "Unable to launch ChromeDriver. Ensure Chrome is installed or place chromedriver in 'drivers'. "
-        f"Original error: {last_error}"
-    ) from last_error
+    _apply_window_bounds(browser)
+    return browser
 
 
 def _apply_window_bounds(driver):
@@ -600,10 +482,16 @@ def _apply_window_bounds(driver):
 def _close_active_drivers():
     global ACTIVE_DRIVERS
     for ctx in ACTIVE_DRIVERS:
+        driver = ctx.get("driver")
+        profile_dir = None
+        with suppress(Exception):
+            profile_dir = getattr(driver, "_taha_profile_dir", None)
         try:
-            ctx["driver"].quit()
+            driver.quit()
         except Exception:
             pass
+        if profile_dir:
+            shutil.rmtree(profile_dir, ignore_errors=True)
     ACTIVE_DRIVERS = []
 
 
@@ -615,39 +503,10 @@ def _close_playwright_sessions():
     PLAYWRIGHT_SESSIONS = []
 
 
-def _format_proxy_url(proxy: str, scheme: str = "", username: str = "", password: str = "") -> tuple[str, Optional[dict]]:
-    """
-    Normalize proxy strings for Playwright/Selenium.
-    Returns (server, playwright_proxy_dict_or_none).
-    """
-    proxy = (proxy or "").strip()
-    scheme = (scheme or "").strip().lower()
-    if not proxy:
-        return "", None
-
-    if proxy.startswith(("http://", "https://", "socks5://", "socks4://")):
-        server = proxy
-    elif scheme:
-        server = f"{scheme}://{proxy}"
-    elif proxy.endswith((":1080", ":1086")):
-        server = f"socks5://{proxy}"
-    else:
-        server = f"http://{proxy}"
-
-    proxy_dict = {"server": server}
-    if username:
-        proxy_dict["username"] = username
-        proxy_dict["password"] = password or ""
-    return server, proxy_dict
-
-
 def _build_playwright_session(
     login_url: str,
     incognito: bool = False,
     headless: bool = False,
-    proxy: Optional[str] = None,
-    proxy_auth: Optional[Tuple[str, str]] = None,
-    proxy_scheme: Optional[str] = None,
 ):
     """
     Launch a Playwright Chromium page configured for the TAHA login flow.
@@ -659,10 +518,6 @@ def _build_playwright_session(
             "Playwright is required. Install via 'pip install playwright' then run 'playwright install chromium'."
         ) from exc
 
-    user = proxy_auth[0] if proxy_auth else ""
-    password = proxy_auth[1] if proxy_auth else ""
-    server, proxy_dict = _format_proxy_url(proxy or "", proxy_scheme or "", user, password)
-
     pw = sync_playwright().start()
     launch_kwargs = {
         "headless": headless,
@@ -673,8 +528,6 @@ def _build_playwright_session(
             "--disable-popup-blocking",
         ],
     }
-    if proxy_dict:
-        launch_kwargs["proxy"] = proxy_dict
     browser = pw.chromium.launch(**launch_kwargs)
 
     context_kwargs = {
@@ -686,18 +539,11 @@ def _build_playwright_session(
     page.set_default_timeout(20000)
     page.goto(login_url, wait_until="domcontentloaded")
 
-    proxy_key = (
-        proxy or "",
-        proxy_scheme or "",
-        user,
-        password,
-    )
     return {
         "playwright": pw,
         "browser": browser,
         "context": context,
         "page": page,
-        "proxy_key": proxy_key,
     }
 
 
@@ -754,27 +600,12 @@ def run_login_batch(
     results = []
     browser_error = ""
     sessions: list[dict] = []
-    default_proxy_user, default_proxy_pass = get_proxy_auth()
 
-    def _proxy_config(row: dict) -> Tuple[str, str, Optional[Tuple[str, str]], tuple]:
-        proxy_raw = str(row.get("proxy") or "").strip()
-        proxy_scheme = str(row.get("proxy_scheme") or "").strip()
-        row_user = str(row.get("proxy_username") or "").strip()
-        row_pass = str(row.get("proxy_password") or "").strip()
-        auth_user = row_user or default_proxy_user or ""
-        auth_pass = row_pass or default_proxy_pass or ""
-        proxy_auth = (auth_user, auth_pass) if auth_user else None
-        key = (proxy_raw, proxy_scheme, auth_user, auth_pass)
-        return proxy_raw, proxy_scheme, proxy_auth, key
-
-    def _new_session(proxy_raw: str = "", proxy_scheme: str = "", proxy_auth=None):
+    def _new_session():
         return _build_playwright_session(
             login_url=login_url,
             incognito=incognito,
             headless=headless,
-            proxy=proxy_raw or None,
-            proxy_auth=proxy_auth,
-            proxy_scheme=proxy_scheme or None,
         )
 
     try:
@@ -783,9 +614,7 @@ def run_login_batch(
         total_credentials = len(credentials)
         pool_size = max(1, min(concurrency or 1, total_credentials))
         for idx in range(pool_size):
-            cred = credentials[idx % total_credentials]
-            proxy_raw, proxy_scheme, proxy_auth, _ = _proxy_config(cred)
-            sessions.append(_new_session(proxy_raw, proxy_scheme, proxy_auth))
+            sessions.append(_new_session())
 
         if not sessions:
             raise RuntimeError("Unable to launch any browser instances.")
@@ -795,12 +624,7 @@ def run_login_batch(
 
         for index, item in enumerate(credentials, 1):
             driver_idx = (index - 1) % len(sessions)
-            proxy_raw, proxy_scheme, proxy_auth, proxy_key = _proxy_config(item)
             ctx = sessions[driver_idx]
-            if ctx.get("proxy_key") != proxy_key:
-                _close_playwright_session(ctx)
-                ctx = _new_session(proxy_raw, proxy_scheme, proxy_auth)
-                sessions[driver_idx] = ctx
 
             page = ctx["page"]
             username_value = (item.get("username") or item.get("id") or "").strip()
@@ -894,7 +718,7 @@ def run_login_batch(
                     browser_error = msg
                     if attempt == 1:
                         _close_playwright_session(ctx)
-                        ctx = _new_session(proxy_raw, proxy_scheme, proxy_auth)
+                        ctx = _new_session()
                         sessions[driver_idx] = ctx
                         page = ctx["page"]
                         continue  # retry this credential once with fresh session
@@ -937,13 +761,10 @@ def click_join_from_browser(driver, timeout=15) -> bool:
 
     end_time = time.time() + timeout
     locators = [
-        (By.ID, "btnOpenInBrowser"),
-        (By.ID, "wc-container-join-from-browser"),
         (By.CSS_SELECTOR, "#btnOpenInBrowser,#wc-container-join-from-browser"),
         (By.XPATH, "//button[contains(., 'Join from browser')]"),
-        (By.XPATH, "//button[contains(., 'Join from your browser')]"),
         (By.XPATH, "//a[contains(., 'Join from browser')]"),
-        (By.XPATH, "//a[contains(., 'Join from your browser')]"),
+        (By.XPATH, '//*[@id="zoom-ui-frame"]/div[2]/div/div[1]/div/button[2]/span'),
         (By.XPATH, "//span[contains(., 'Join from browser')]/ancestor::*[self::button or self::a]"),
         (By.XPATH, "//span[contains(., 'Join from your browser')]/ancestor::*[self::button or self::a]"),
         (By.CSS_SELECTOR, "button.joinFromBrowser, a.joinFromBrowser"),
@@ -1119,7 +940,7 @@ def click_continue_without_mic_camera(driver, timeout=20) -> bool:
     return clicked_once
 
 
-def find_name_input(driver, timeout=20):
+def find_name_input(driver, timeout=2):
     """Locate the meeting name input regardless of iframe nesting."""
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
@@ -1141,12 +962,14 @@ def find_name_input(driver, timeout=20):
         try:
             driver.switch_to.default_content()
         except Exception as exc:
+            print(f"Error switching to default content: {exc}")
             last_error = exc
             break
         contexts = [None]
         try:
             contexts.extend(driver.find_elements(By.TAG_NAME, "iframe"))
         except Exception:
+            print("Error finding iframes, proceeding with default content only.")
             pass
         for frame in contexts:
             try:
@@ -1285,51 +1108,37 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 return elements[0]
         return None
 
-    def format_proxy(raw: str, scheme: str = "") -> str:
-        raw = (raw or "").strip()
-        if not raw:
-            return ""
-        sc = (scheme or "").lower().strip()
-        if raw.startswith(("http://", "https://", "socks5://", "socks4://")):
-            return raw
-        if sc:
-            return f"{sc}://{raw}"
-        if raw.endswith((":1080", ":1086")):
-            return f"socks5://{raw}"
-        return f"http://{raw}"
-
-    proxy_user, proxy_pass = get_proxy_auth()
+    def wait_and_click(driver, by, selector, timeout=12) -> bool:
+        try:
+            el = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable((by, selector)))
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            try:
+                el.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", el)
+            return True
+        except Exception:
+            return False
+        
+    def try_selectors(driver, candidates, timeout_each=10) -> bool:
+        """Try several selectors (list of (By, value)) until one clicks."""
+        for by, value in candidates:
+            if wait_and_click(driver, by, value, timeout=timeout_each):
+                return True
+        return False
 
     def join_class(cred):
         local_errors: list[str] = []
-        proxy_raw = cred.get("proxy") or ""
-        proxy_addr = format_proxy(proxy_raw, cred.get("proxy_scheme") or "")
-        row_proxy_user = str(cred.get("proxy_username") or "").strip()
-        row_proxy_pass = str(cred.get("proxy_password") or "").strip()
-        auth_user = row_proxy_user or proxy_user or ""
-        auth_pass = row_proxy_pass or proxy_pass or ""
 
-        def build_driver(proxy_val, auth_val):
-            return _build_driver(
-                incognito=False,
-                headless=False,
-                proxy=proxy_val if proxy_val else None,
-                proxy_auth=auth_val,
-                proxy_scheme=cred.get("proxy_scheme") or None,
-            )
-
-        def start_session(proxy_val, auth_val):
-            drv = build_driver(proxy_val, auth_val)
+        def start_session():
+            drv = _build_driver(incognito=False, headless=False)
+            with suppress(Exception):
+                drv.maximize_window()
             wt = WebDriverWait(drv, 25)
             with active_lock:
                 ACTIVE_DRIVERS.append({"driver": drv, "wait": wt})
             drv.get(portal_url)
             time.sleep(1.5)
-            try:
-                if "ERR_NO_SUPPORTED_PROXIES" in drv.page_source:
-                    raise RuntimeError("Proxy unsupported by Chrome")
-            except Exception:
-                raise
             return drv, wt
 
         def cleanup_driver(drv):
@@ -1340,17 +1149,13 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
             with suppress(Exception):
                 drv.quit()
 
+        driver = None
         try:
-            driver, wait = start_session(proxy_addr, (auth_user, auth_pass) if auth_user else None)
+            driver, wait = start_session()
         except Exception as exc:
-            if proxy_addr:
-                cleanup_driver(locals().get("driver"))
-                # Do NOT fall back to direct; surface the proxy error and stop this credential
-                local_errors.append(f"Proxy failed: {exc}")
-                return local_errors
-            else:
-                local_errors.append(str(exc))
-                return local_errors
+            cleanup_driver(driver)
+            local_errors.append(str(exc))
+            return local_errors
 
         username_value = str(cred.get("username") or cred.get("id") or "").strip()
         password_value = str(cred.get("password") or "").strip()
@@ -1386,7 +1191,7 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
 
         if not username_input or not password_input:
             local_errors.append("Login form not found on the portal.")
-            cleanup_driver(locals().get("driver"))
+            cleanup_driver(driver)
             return local_errors
 
         username_input.clear()
@@ -1417,7 +1222,7 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
             target.click()
         except Exception as exc:
             local_errors.append(f"Target card not found: {exc}")
-            cleanup_driver(locals().get("driver"))
+            cleanup_driver(driver)
             return local_errors
 
         followup_xpath = "/html/body/div[1]/div[2]/div/div[2]/div/div[2]/h3[2]/span/a"
@@ -1442,63 +1247,49 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 driver.switch_to.window(zoom_handle)
 
             try:
-                click_join_from_browser(driver, timeout=15)
+                click_join_from_browser(driver, timeout=5)
             except Exception:
                 pass
 
             followup = None
-            try:
-                followup = wait.until(EC.element_to_be_clickable((By.XPATH, followup_xpath)))
-            except Exception:
-                pass
-            if followup:
-                followup.click()
-            else:
-                join_candidates = [
-                    (By.XPATH, "//button[contains(., 'Join from browser')]"),
-                    (By.XPATH, "//a[contains(., 'Join from browser')]"),
-                    (By.XPATH, "//button[contains(., 'Join from your browser')]"),
-                    (By.XPATH, "//a[contains(., 'Join from your browser')]"),
-                    (By.XPATH, "/html/body/div[1]/div[2]/div/div[2]/div[2]/div[1]/div/button[2]"),
-                ]
-                join_link = find_first(driver, join_candidates)
-                if join_link:
-                    try:
-                        join_link.location_once_scrolled_into_view
-                    except Exception:
-                        pass
-                    join_link.click()
+            # try:
+            #     followup = wait.until(EC.element_to_be_clickable((By.XPATH, followup_xpath)))
+            # except Exception:
+            #     pass
+            # if followup:
+            #     followup.click()
+            # else:
+            # driver.current_window_handle
+            try_selectors(driver, [
+                (By.CSS_SELECTOR, "zoom-button zoom-button--large zoom-button--secondary g7nkJFrV"),
+                (By.CLASS_NAME, "zoom-button zoom-button--large zoom-button--secondary g7nkJFrV"),
+                (By.XPATH, "/html/body/div[1]/div[2]/div/div[2]/div/div[1]/div/button[2]"),
+                (By.XPATH, '//*[@id="zoom-ui-frame"]/div[2]/div/div[1]/div/button[2]'),
+            ], timeout_each=8)
+
 
             try:
                 click_continue_without_mic_camera(driver, timeout=20)
             except Exception:
                 pass
 
-            try:
-                followup_button = wait.until(
-                    EC.element_to_be_clickable(
-                        (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
-                    )
-                )
-                followup_button.click()
-            except Exception:
-                pass
+            # try:
+            #     followup_button = wait.until(
+            #         EC.element_to_be_clickable(
+            #             (By.XPATH, "/html/body/div[2]/div[2]/div/div[1]/div/div[2]/button")
+            #         )
+            #     )
+            #     followup_button.click()
+            # except Exception:
+            #     pass
 
-            try:
-                disable_zoom_media_prompts(driver, timeout=10)
-            except Exception:
-                pass
+            # try:
+            #     disable_zoom_media_prompts(driver, timeout=10)
+            # except Exception:
+            #     pass
 
             try:
                 name_input = find_name_input(driver, timeout=10)
-                try:
-                    name_input.clear()
-                except Exception:
-                    pass
-                try:
-                    name_input.send_keys(display_name)
-                except Exception:
-                    pass
                 name_input.send_keys(Keys.RETURN)
                 time.sleep(2)
             except Exception as e:
@@ -1506,7 +1297,7 @@ def run_zoom_portal(credentials: list[dict], portal_url: str, target_xpath: str,
                 pass
         except Exception as exc:
             local_errors.append(f"Follow-up target not found: {exc}")
-            cleanup_driver(locals().get("driver"))
+            cleanup_driver(driver)
             return local_errors
         return local_errors
 
